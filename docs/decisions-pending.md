@@ -8,7 +8,7 @@
 
 ## Não bloqueiam o desenvolvimento local da primeira fatia
 
-- transporte definitivo da outbox e tecnologia de fila;
+- transporte externo definitivo da outbox e tecnologia de fila; o dispatcher interno em PostgreSQL já está definido;
 - ferramenta de observabilidade e retenção dos sinais;
 - integração com Mountier Agro;
 - regras fiscais, contábeis, liquidação, qualidade realizada e execução física;
