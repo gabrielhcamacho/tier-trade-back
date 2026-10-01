@@ -20,5 +20,7 @@ Todos carregam `id`, `tenant_id`, tipo, agregado, payload mínimo e instante. A 
 - `commercial_activity_read_model` registra a linha do tempo de todos os eventos;
 - `contract_summary_read_model` é criada idempotentemente por `contract.activated`;
 - `published_at` indica entrega aos consumidores internos atuais.
+- o worker expõe saúde em `/health/live` e `/health/ready` e métricas em `/metrics` na porta operacional própria;
+- falha, retentativa e recuperação geram logs JSON sem payload de negócio.
 
 O schema será versionado antes do primeiro consumidor externo. Esse transporte terá controle de entrega próprio para não confundir projeção interna com publicação fora do processo.

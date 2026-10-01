@@ -1,0 +1,50 @@
+groups:
+  - name: tier-trade-outbox
+    rules:
+      - alert: TierTradeOutboxWorkerNotReady
+        expr: tier_trade_outbox_worker_ready == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Dispatcher da outbox indisponível para o tenant {{ $labels.tenant_id }}"
+
+      - alert: TierTradeOutboxBatchStalled
+        expr: time() - tier_trade_outbox_last_batch_timestamp_seconds > 120
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Dispatcher sem concluir lotes para o tenant {{ $labels.tenant_id }}"
+
+      - alert: TierTradeOutboxOldPendingEvent
+        expr: tier_trade_outbox_oldest_pending_age_seconds > 300
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Evento da outbox pendente há mais de cinco minutos no tenant {{ $labels.tenant_id }}"
+
+      - alert: TierTradeOutboxRepeatedFailures
+        expr: increase(tier_trade_outbox_events_total{outcome="failed"}[10m]) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Falhas repetidas no dispatcher da outbox do tenant {{ $labels.tenant_id }}"
+
+      - alert: TierTradeOutboxBatchErrors
+        expr: increase(tier_trade_outbox_batches_total{outcome="error"}[5m]) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Erro impediu a conclusão do lote da outbox no tenant {{ $labels.tenant_id }}"
+
+      - alert: TierTradeOutboxBacklogGrowing
+        expr: tier_trade_outbox_pending_events > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Backlog da outbox acima do limite no tenant {{ $labels.tenant_id }}"

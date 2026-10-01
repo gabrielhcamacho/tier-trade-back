@@ -161,9 +161,9 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
 
     const processor = app.get(OutboxProcessor);
     const firstPass = await processor.processTenant(identityHeaders['x-tenant-id']);
-    expect(firstPass).toEqual({ claimed: 12, published: 12, failed: 0 });
-    expect(await processor.processTenant(identityHeaders['x-tenant-id'])).toEqual({
-      claimed: 0, published: 0, failed: 0,
+    expect(firstPass).toMatchObject({ claimed: 12, published: 12, failed: 0, recovered: 0, pending: 0 });
+    expect(await processor.processTenant(identityHeaders['x-tenant-id'])).toMatchObject({
+      claimed: 0, published: 0, failed: 0, recovered: 0, pending: 0,
     });
 
     const verification = new Pool({ connectionString: databaseUrl });
@@ -200,7 +200,7 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
       [identityHeaders['x-tenant-id'], invalidEventId, randomUUID()],
     );
     const failedPass = await processor.processTenant(identityHeaders['x-tenant-id']);
-    expect(failedPass).toEqual({ claimed: 1, published: 0, failed: 1 });
+    expect(failedPass).toMatchObject({ claimed: 1, published: 0, failed: 1, recovered: 0, pending: 1, delayed: 1 });
     const retry = await verification.query<{
       attempts: number;
       locked_at: Date | null;
@@ -217,6 +217,44 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
       last_error: 'CONTRACT_PROJECTION_SOURCE_NOT_FOUND',
       delayed: true,
     });
+
+    await verification.query(
+      `UPDATE app.outbox_events
+          SET aggregate_id=$3, available_at=now()
+        WHERE tenant_id=$1 AND id=$2`,
+      [identityHeaders['x-tenant-id'], invalidEventId, contract.contractId],
+    );
+    const recoveredPass = await processor.processTenant(identityHeaders['x-tenant-id']);
+    expect(recoveredPass).toMatchObject({
+      claimed: 1, published: 1, failed: 0, recovered: 1, pending: 0, delayed: 0,
+    });
+    const recovered = await verification.query<{ attempts: number; published_at: Date | null; last_error: string | null }>(
+      `SELECT attempts,published_at,last_error FROM app.outbox_events WHERE tenant_id=$1 AND id=$2`,
+      [identityHeaders['x-tenant-id'], invalidEventId],
+    );
+    expect(recovered.rows[0]).toMatchObject({ attempts: 2, last_error: null });
+    expect(recovered.rows[0]?.published_at).toBeInstanceOf(Date);
+
+    const otherTenantId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const otherEventId = randomUUID();
+    await verification.query(
+      `INSERT INTO app.tenants (id,legal_name,timezone)
+       VALUES ($1,'Tenant isolado','America/Sao_Paulo')`,
+      [otherTenantId],
+    );
+    await verification.query(
+      `INSERT INTO app.outbox_events
+         (tenant_id,id,event_type,aggregate_type,aggregate_id,payload)
+       VALUES ($1,$2,'offer.created','offer',$3,'{}'::jsonb)`,
+      [otherTenantId, otherEventId, randomUUID()],
+    );
+    expect(await processor.processTenant(identityHeaders['x-tenant-id'])).toMatchObject({ claimed: 0, pending: 0 });
+    const isolated = await verification.query<{ published_at: Date | null }>(
+      'SELECT published_at FROM app.outbox_events WHERE tenant_id=$1 AND id=$2',
+      [otherTenantId, otherEventId],
+    );
+    expect(isolated.rows[0]?.published_at).toBeNull();
+    expect(await processor.processTenant(otherTenantId)).toMatchObject({ claimed: 1, published: 1, failed: 0 });
     await verification.end();
   });
 });

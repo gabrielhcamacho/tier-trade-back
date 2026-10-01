@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { DatabasePlatformPort } from '../database/database.js';
+import { OutboxObservability, type OutboxQueueSnapshot } from './outbox.observability.js';
 
 interface ClaimedEvent {
   id: string;
@@ -10,38 +11,62 @@ interface ClaimedEvent {
   aggregate_id: string;
   payload: Record<string, unknown>;
   occurred_at: Date;
+  attempts: number;
 }
 
 export interface OutboxBatchResult {
   claimed: number;
   published: number;
   failed: number;
+  recovered: number;
+  durationMs: number;
+  pending: number;
+  delayed: number;
+  oldestPendingAgeSeconds: number;
 }
 
 @Injectable()
 export class OutboxProcessor {
-  constructor(@Inject(DatabasePlatformPort) private readonly db: DatabasePlatformPort) {}
+  constructor(
+    @Inject(DatabasePlatformPort) private readonly db: DatabasePlatformPort,
+    @Inject(OutboxObservability) private readonly observability: OutboxObservability,
+  ) {}
 
   async processTenant(
     tenantId: string,
     workerId = randomUUID(),
     batchSize = 25,
   ): Promise<OutboxBatchResult> {
-    const events = await this.claim(tenantId, workerId, batchSize);
-    let published = 0;
-    let failed = 0;
+    const startedAt = performance.now();
+    try {
+      const events = await this.claim(tenantId, workerId, batchSize);
+      this.observability.claimed(tenantId, events.length);
+      let published = 0;
+      let failed = 0;
+      let recovered = 0;
 
-    for (const event of events) {
-      try {
-        await this.project(tenantId, workerId, event);
-        published += 1;
-      } catch (error) {
-        failed += 1;
-        await this.releaseForRetry(tenantId, workerId, event.id, error);
+      for (const event of events) {
+        try {
+          await this.project(tenantId, workerId, event);
+          published += 1;
+          if (event.attempts > 1) recovered += 1;
+          this.observability.published(tenantId, event.event_type, event.id, event.attempts);
+        } catch (error) {
+          failed += 1;
+          await this.releaseForRetry(tenantId, workerId, event.id, error);
+          this.observability.failed(tenantId, event.event_type, event.id, event.attempts, error);
+        }
       }
-    }
 
-    return { claimed: events.length, published, failed };
+      const queue = await this.inspectQueue(tenantId);
+      const durationMs = Math.round(performance.now() - startedAt);
+      const result = { claimed: events.length, published, failed, recovered };
+      this.observability.batch(tenantId, workerId, result, durationMs, queue);
+      return { ...result, durationMs, ...queue };
+    } catch (error) {
+      this.observability.batchError(tenantId, workerId, Math.round(performance.now() - startedAt), error);
+      throw error;
+    }
   }
 
   private claim(tenantId: string, workerId: string, batchSize: number): Promise<ClaimedEvent[]> {
@@ -64,10 +89,33 @@ export class OutboxProcessor {
            FROM candidates
           WHERE (event.tenant_id, event.id) = (candidates.tenant_id, candidates.id)
          RETURNING event.id, event.event_type, event.aggregate_type, event.aggregate_id,
-                   event.payload, event.occurred_at`,
+                   event.payload, event.occurred_at, event.attempts`,
         [tenantId, safeBatchSize, workerId],
       );
       return result.rows;
+    });
+  }
+
+  private inspectQueue(tenantId: string): Promise<OutboxQueueSnapshot> {
+    return this.db.transaction(tenantId, async (client) => {
+      const result = await client.query<{
+        pending: string;
+        delayed: string;
+        oldest_pending_age_seconds: string | null;
+      }>(
+        `SELECT count(*)::text AS pending,
+                count(*) FILTER (WHERE available_at > now())::text AS delayed,
+                COALESCE(EXTRACT(epoch FROM now() - min(occurred_at)),0)::text AS oldest_pending_age_seconds
+           FROM app.outbox_events
+          WHERE tenant_id=$1 AND published_at IS NULL`,
+        [tenantId],
+      );
+      const row = result.rows[0];
+      return {
+        pending: Number(row?.pending ?? 0),
+        delayed: Number(row?.delayed ?? 0),
+        oldestPendingAgeSeconds: Math.max(0, Number(row?.oldest_pending_age_seconds ?? 0)),
+      };
     });
   }
 
