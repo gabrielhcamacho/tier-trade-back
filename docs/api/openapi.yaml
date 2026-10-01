@@ -3,6 +3,17 @@ info:
   title: Tier Trade API
   version: 0.1.0
 paths:
+  /health/live:
+    get:
+      summary: Verifica o processo da API
+      responses:
+        '200': { description: Processo saudável }
+  /health/ready:
+    get:
+      summary: Verifica a conexão com o banco
+      responses:
+        '200': { description: API pronta }
+        '503': { description: Dependência indisponível }
   /v1/offers:
     post:
       summary: Registra uma oferta e seu cenário determinístico

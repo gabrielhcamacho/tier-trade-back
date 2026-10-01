@@ -11,4 +11,6 @@ Backend modular da plataforma Tier Trade. A primeira fatia cobre oferta de compr
 
 Swagger fica em `http://localhost:3001/docs`. Os cabeçalhos locais estão documentados em `.env.example` e no seed; eles não funcionam em produção.
 
+Sondas operacionais: `GET /health/live` verifica o processo e `GET /health/ready` verifica o banco.
+
 Leia `docs/first-slice.md` antes de ampliar o domínio.

@@ -6,6 +6,7 @@ export const DATABASE_POOL = Symbol('DATABASE_POOL');
 export abstract class DatabasePlatformPort {
   abstract transaction<T>(tenantId: string, operation: (client: PoolClient) => Promise<T>): Promise<T>;
   abstract one<T extends QueryResultRow>(client: PoolClient, text: string, values: unknown[]): Promise<T>;
+  abstract ping(): Promise<void>;
 }
 
 @Injectable()
@@ -34,6 +35,10 @@ export class TenantDatabase extends DatabasePlatformPort implements OnModuleDest
     const result = await client.query<T>(text, values);
     if (result.rows.length !== 1) throw new Error('Expected exactly one database row.');
     return result.rows[0]!;
+  }
+
+  async ping(): Promise<void> {
+    await this.pool.query('SELECT 1');
   }
 
   async onModuleDestroy(): Promise<void> {
