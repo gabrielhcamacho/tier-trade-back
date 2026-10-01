@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../app.module.js';
+import { createCorsOptions } from '../http/cors.js';
 import { OutboxProcessor } from '../outbox/outbox.processor.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -36,6 +37,7 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
       logger: false,
       abortOnError: false,
     });
+    app.enableCors(createCorsOptions('http://localhost:3000'));
     await app.init();
     await app.getHttpAdapter().getInstance().ready();
   }, 30_000);
@@ -46,6 +48,19 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
 
   it('moves an offer requiring approval through to an active contract', async () => {
     const server = app.getHttpAdapter().getInstance();
+    const preflight = await server.inject({
+      method: 'OPTIONS',
+      url: '/v1/settings/margin-policy',
+      headers: {
+        origin: 'http://localhost:3000',
+        'access-control-request-method': 'PATCH',
+        'access-control-request-headers': 'authorization,content-type,x-tenant-id',
+      },
+    });
+    expect(preflight.statusCode).toBe(204);
+    expect(preflight.headers['access-control-allow-origin']).toBe('http://localhost:3000');
+    expect(preflight.headers['access-control-allow-methods']).toContain('PATCH');
+
     const counterparty = await server.inject({
       method: 'POST', url: '/v1/counterparties', headers: identityHeaders,
       payload: { legalName: 'Cooperativa Teste do Cerrado', taxId: '12.345.678/0001-90' },
@@ -103,20 +118,47 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
       method: 'POST', url: '/v1/offers', headers: identityHeaders, payload: offerInput,
     });
     const cancellableOffer = cancellable.json();
+    const cancellableSubmission = await server.inject({
+      method: 'POST', url: `/v1/offers/${cancellableOffer.offerId}/submit`, headers: identityHeaders,
+    });
+    expect(cancellableSubmission.statusCode).toBe(201);
+    expect(cancellableSubmission.json().decision).toBe('APPROVAL_REQUIRED');
+    const cancellableApproval = await server.inject({
+      method: 'POST',
+      url: `/v1/approvals/${cancellableSubmission.json().approvalId}/approve`,
+      headers: identityHeaders,
+    });
+    expect(cancellableApproval.statusCode).toBe(201);
+    expect(cancellableApproval.json().status).toBe('APPROVED');
+    const cancellationReason = 'Homologação: cancelamento controlado antes da ativação do contrato.';
     const cancelled = await server.inject({
       method: 'POST', url: `/v1/offers/${cancellableOffer.offerId}/cancel`, headers: identityHeaders,
-      payload: { reason: 'Condições comerciais retiradas pela contraparte.' },
+      payload: { reason: cancellationReason },
     });
     expect(cancelled.statusCode).toBe(201);
-    expect(cancelled.json().status).toBe('CANCELLED');
+    expect(cancelled.json()).toMatchObject({ status: 'CANCELLED', reason: cancellationReason });
     const invalidSubmission = await server.inject({
       method: 'POST', url: `/v1/offers/${cancellableOffer.offerId}/submit`, headers: identityHeaders,
     });
     expect(invalidSubmission.statusCode).toBe(409);
 
+    const belowFloor = await server.inject({
+      method: 'POST',
+      url: '/v1/offers',
+      headers: identityHeaders,
+      payload: { ...offerInput, saleReferencePerSc: '65.50' },
+    });
+    expect(belowFloor.statusCode).toBe(201);
+    expect(belowFloor.json().pricing.projectedMarginPerSc).toBe('0.50');
+    const blockedSubmission = await server.inject({
+      method: 'POST', url: `/v1/offers/${belowFloor.json().offerId}/submit`, headers: identityHeaders,
+    });
+    expect(blockedSubmission.statusCode).toBe(422);
+    expect(blockedSubmission.json()).toMatchObject({ code: 'MARGIN_BELOW_ABSOLUTE_FLOOR' });
+
     const processor = app.get(OutboxProcessor);
     const firstPass = await processor.processTenant(identityHeaders['x-tenant-id']);
-    expect(firstPass).toEqual({ claimed: 9, published: 9, failed: 0 });
+    expect(firstPass).toEqual({ claimed: 12, published: 12, failed: 0 });
     expect(await processor.processTenant(identityHeaders['x-tenant-id'])).toEqual({
       claimed: 0, published: 0, failed: 0,
     });
@@ -134,9 +176,18 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
         WHERE tenant_id=$1 AND contract_id=$2`,
       [identityHeaders['x-tenant-id'], contract.contractId],
     );
-    expect(activity.rows[0]?.count).toBe('9');
+    const cancellationAudit = await verification.query<{ payload: { previousStatus: string; reason: string } }>(
+      `SELECT payload FROM app.audit_events
+        WHERE tenant_id=$1 AND aggregate_id=$2 AND event_type='offer.cancelled'`,
+      [identityHeaders['x-tenant-id'], cancellableOffer.offerId],
+    );
+    expect(activity.rows[0]?.count).toBe('12');
     expect(projection.rows[0]?.projected_margin_per_sc).toBe('3.000000');
     expect(projection.rows[0]?.obligations).toHaveLength(2);
+    expect(cancellationAudit.rows[0]?.payload).toEqual({
+      previousStatus: 'APPROVED',
+      reason: cancellationReason,
+    });
 
     const invalidEventId = randomUUID();
     await verification.query(
