@@ -4,9 +4,11 @@ import { Identity, type RequestIdentity, RequestIdentityGuard } from '../auth/re
 import { SchemaPipe } from '../common/schema.pipe.js';
 import {
   cancelOfferSchema,
+  createCounterpartySchema,
   createOfferSchema,
   marginPolicySchema,
   type CancelOfferInput,
+  type CreateCounterpartyInput,
   type CreateOfferInput,
   type MarginPolicyInput,
 } from './commercial.schemas.js';
@@ -23,6 +25,12 @@ export class CommercialController {
   @Get('counterparties')
   counterparties(@Identity() identity: RequestIdentity) {
     return this.service.listCounterparties(identity.tenantId, identity.actorId);
+  }
+
+  @Post('counterparties')
+  createCounterparty(@Identity() identity: RequestIdentity,
+    @Body(new SchemaPipe(createCounterpartySchema)) input: CreateCounterpartyInput) {
+    return this.service.createCounterparty(identity.tenantId, identity.actorId, input);
   }
 
   @Post('offers')

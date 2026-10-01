@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { DatabasePlatformPort } from '../database/database.js';
 import { calculateProjectedMargin, decideSubmission } from '../domain/pricing.js';
-import type { CancelOfferInput, CreateOfferInput, MarginPolicyInput } from './commercial.schemas.js';
+import type { CancelOfferInput, CreateCounterpartyInput, CreateOfferInput, MarginPolicyInput } from './commercial.schemas.js';
 
 interface MarginPolicyRow {
   id: string;
@@ -23,6 +23,28 @@ export class CommercialService {
       const result = await client.query<{ id: string; legal_name: string }>(
         `SELECT id,legal_name FROM app.counterparties WHERE tenant_id=$1 ORDER BY legal_name,id`, [tenantId]);
       return result.rows.map((row) => ({ id: row.id, legalName: row.legal_name }));
+    });
+  }
+
+  async createCounterparty(tenantId: string, actorId: string, input: CreateCounterpartyInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'COMMERCIAL_EDIT');
+      const counterpartyId = randomUUID();
+      try {
+        await client.query(
+          `INSERT INTO app.counterparties (tenant_id,id,legal_name,tax_id)
+           VALUES ($1,$2,$3,$4)`,
+          [tenantId, counterpartyId, input.legalName, input.taxId],
+        );
+      } catch (cause) {
+        if (typeof cause === 'object' && cause !== null && 'code' in cause && cause.code === '23505') {
+          throw new ConflictException({ code: 'COUNTERPARTY_TAX_ID_ALREADY_EXISTS' });
+        }
+        throw cause;
+      }
+      await this.record(client, tenantId, actorId, 'counterparty.created', 'counterparty', counterpartyId,
+        { legalName: input.legalName });
+      return { id: counterpartyId, legalName: input.legalName, taxId: input.taxId };
     });
   }
 
@@ -127,7 +149,13 @@ export class CommercialService {
   async currentMarginPolicy(tenantId: string, actorId: string, commodity: 'MILHO') {
     return this.db.transaction(tenantId, async (client) => {
       await this.assertMember(client, tenantId, actorId);
-      const policy = await this.activeMarginPolicy(client, tenantId, commodity);
+      const result = await client.query<MarginPolicyRow>(
+        `SELECT id,version,auto_approval_margin_per_sc,absolute_floor_margin_per_sc
+           FROM app.margin_policies WHERE tenant_id=$1 AND commodity=$2 AND active=true`,
+        [tenantId, commodity],
+      );
+      const policy = result.rows[0];
+      if (!policy) return null;
       return {
         id: policy.id,
         commodity,

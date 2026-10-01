@@ -3,6 +3,14 @@ import { z } from 'zod';
 const decimalString = z.string().regex(/^\d+(?:\.\d{1,6})?$/, 'Expected a non-negative decimal string.');
 const localDate = z.iso.date();
 
+export const createCounterpartySchema = z.object({
+  legalName: z.string().trim().min(3).max(200),
+  taxId: z.string().trim().transform((value) => value.replace(/\D/g, ''))
+    .pipe(z.string().min(11).max(14)),
+});
+
+export type CreateCounterpartyInput = z.infer<typeof createCounterpartySchema>;
+
 export const createOfferSchema = z.object({
   counterpartyId: z.uuid(),
   commodity: z.literal('MILHO'),
