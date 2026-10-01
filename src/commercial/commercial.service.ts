@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import Decimal from 'decimal.js';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
@@ -15,7 +15,7 @@ interface MarginPolicyRow {
 
 @Injectable()
 export class CommercialService {
-  constructor(private readonly db: DatabasePlatformPort) {}
+  constructor(@Inject(DatabasePlatformPort) private readonly db: DatabasePlatformPort) {}
 
   async createOffer(tenantId: string, actorId: string, input: CreateOfferInput) {
     if (input.deliveryEnd < input.deliveryStart) {

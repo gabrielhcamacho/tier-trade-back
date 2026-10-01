@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Inject, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
 import { ApiHeader, ApiTags } from '@nestjs/swagger';
 import { DevelopmentIdentityGuard } from '../common/identity.guard.js';
 import { SchemaPipe } from '../common/schema.pipe.js';
@@ -11,7 +11,7 @@ import { CommercialService } from './commercial.service.js';
 @UseGuards(DevelopmentIdentityGuard)
 @Controller('v1')
 export class CommercialController {
-  constructor(private readonly service: CommercialService) {}
+  constructor(@Inject(CommercialService) private readonly service: CommercialService) {}
 
   @Post('offers')
   create(@Headers('x-tenant-id') tenantId: string, @Headers('x-actor-id') actorId: string,
