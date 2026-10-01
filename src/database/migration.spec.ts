@@ -6,11 +6,13 @@ describe('commercial foundation migration', () => {
   it('applies and isolates rows through the transaction tenant context', async () => {
     const db = new PGlite();
     for (const migrationName of [
-      '0001_commercial_foundation.sql',
-      '0002_outbox_read_models.sql',
-      '0003_commercial_governance.sql',
+      '20261001000100_commercial_foundation.sql',
+      '20261001000200_outbox_read_models.sql',
+      '20261001000300_commercial_governance.sql',
+      '20261001193311_harden_tenant_rls.sql',
+      '20261001194949_optimize_tenant_rls.sql',
     ]) {
-      const migration = await readFile(new URL(`../../migrations/${migrationName}`, import.meta.url), 'utf8');
+      const migration = await readFile(new URL(`../../supabase/migrations/${migrationName}`, import.meta.url), 'utf8');
       await db.exec(migration);
     }
     await db.exec(`

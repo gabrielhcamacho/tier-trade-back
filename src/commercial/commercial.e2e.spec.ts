@@ -22,9 +22,11 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     }
     const setup = new Pool({ connectionString: databaseUrl });
     await setup.query('DROP SCHEMA IF EXISTS app CASCADE');
-    await setup.query(await readFile(new URL('../../migrations/0001_commercial_foundation.sql', import.meta.url), 'utf8'));
-    await setup.query(await readFile(new URL('../../migrations/0002_outbox_read_models.sql', import.meta.url), 'utf8'));
-    await setup.query(await readFile(new URL('../../migrations/0003_commercial_governance.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261001000100_commercial_foundation.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261001000200_outbox_read_models.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261001000300_commercial_governance.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261001193311_harden_tenant_rls.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261001194949_optimize_tenant_rls.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../scripts/seed-local.sql', import.meta.url), 'utf8'));
     await setup.end();
 
