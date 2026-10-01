@@ -3,8 +3,7 @@
 ## Bloqueiam ambiente compartilhado
 
 1. Projeto Supabase e ambientes definitivos, incluindo domínio, SMTP e URLs de redirecionamento.
-2. Modelo do Control Plane para convite + criação atômica da membership por tenant.
-3. Topologia dos ambientes gerenciados e política de residência/backup.
+2. Topologia dos ambientes gerenciados e política de residência/backup.
 
 ## Não bloqueiam o desenvolvimento local da primeira fatia
 
@@ -19,3 +18,5 @@
 - Supabase Auth é o primeiro adaptador OIDC;
 - cada tenant configura e versiona a própria política de margem;
 - a primeira slice está tecnicamente homologada para edição e cancelamento controlados.
+- o Control Plane mínimo resolve um único tenant ativo por usuário e coordena convite, membership e capabilities;
+- no MVP, o convite parte da API administrativa; a origem será substituída pelo painel interno comercial sem mudar o contrato de acesso.

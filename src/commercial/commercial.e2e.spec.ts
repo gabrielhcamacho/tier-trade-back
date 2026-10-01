@@ -22,12 +22,15 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
       throw new Error('TEST_DATABASE_URL must target the dedicated tier_trade_test database.');
     }
     const setup = new Pool({ connectionString: databaseUrl });
+    await setup.query('DROP SCHEMA IF EXISTS control CASCADE');
     await setup.query('DROP SCHEMA IF EXISTS app CASCADE');
     await setup.query(await readFile(new URL('../../supabase/migrations/20261001000100_commercial_foundation.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261001000200_outbox_read_models.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261001000300_commercial_governance.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261001193311_harden_tenant_rls.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261001194949_optimize_tenant_rls.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261001224302_control_plane_access.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261001224527_index_control_invitation_inviter.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../scripts/seed-local.sql', import.meta.url), 'utf8'));
     await setup.end();
 

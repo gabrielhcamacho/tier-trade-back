@@ -52,7 +52,7 @@ export class CommercialService {
     this.assertDeliveryWindow(input);
     const pricing = calculateProjectedMargin(input);
     return this.db.transaction(tenantId, async (client) => {
-      await this.assertMember(client, tenantId, actorId);
+      await this.assertCapability(client, tenantId, actorId, 'COMMERCIAL_EDIT');
       const policy = await this.db.one<MarginPolicyRow>(
         client,
         `SELECT id, version, auto_approval_margin_per_sc, absolute_floor_margin_per_sc
@@ -87,11 +87,10 @@ export class CommercialService {
     this.assertDeliveryWindow(input);
     const pricing = calculateProjectedMargin(input);
     return this.db.transaction(tenantId, async (client) => {
-      await this.assertMember(client, tenantId, actorId);
+      await this.assertCapability(client, tenantId, actorId, 'COMMERCIAL_EDIT');
       const offer = await this.db.one<{ status: string; created_by: string }>(client,
         'SELECT status,created_by FROM app.offers WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [tenantId, offerId]);
       if (offer.status !== 'DRAFT') throw new ConflictException({ code: 'ONLY_DRAFT_OFFERS_CAN_BE_EDITED' });
-      if (offer.created_by !== actorId) await this.assertCapability(client, tenantId, actorId, 'COMMERCIAL_EDIT');
       const policy = await this.activeMarginPolicy(client, tenantId, input.commodity);
       const previous = await this.db.one<{ id: string; version: number }>(client,
         `SELECT id,version FROM app.pricing_scenarios
@@ -200,7 +199,7 @@ export class CommercialService {
 
   async submitOffer(tenantId: string, actorId: string, offerId: string) {
     return this.db.transaction(tenantId, async (client) => {
-      await this.assertMember(client, tenantId, actorId);
+      await this.assertCapability(client, tenantId, actorId, 'COMMERCIAL_EDIT');
       const row = await this.db.one<MarginPolicyRow & { status: string; projected_margin_per_sc: string }>(
         client,
         `SELECT o.status, s.projected_margin_per_sc, p.id, p.version,
@@ -251,7 +250,7 @@ export class CommercialService {
 
   async activateContract(tenantId: string, actorId: string, offerId: string) {
     return this.db.transaction(tenantId, async (client) => {
-      await this.assertMember(client, tenantId, actorId);
+      await this.assertCapability(client, tenantId, actorId, 'COMMERCIAL_EDIT');
       const offer = await this.db.one<{ status: string }>(client,
         'SELECT status FROM app.offers WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [tenantId, offerId]);
       if (offer.status !== 'APPROVED') throw new ConflictException({ code: 'OFFER_NOT_APPROVED' });

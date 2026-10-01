@@ -5,6 +5,7 @@ export const DATABASE_POOL = Symbol('DATABASE_POOL');
 
 export abstract class DatabasePlatformPort {
   abstract transaction<T>(tenantId: string, operation: (client: PoolClient) => Promise<T>): Promise<T>;
+  abstract controlPlaneTransaction<T>(operation: (client: PoolClient) => Promise<T>): Promise<T>;
   abstract one<T extends QueryResultRow>(client: PoolClient, text: string, values: unknown[]): Promise<T>;
   abstract ping(): Promise<void>;
 }
@@ -16,10 +17,20 @@ export class TenantDatabase extends DatabasePlatformPort implements OnModuleDest
   }
 
   async transaction<T>(tenantId: string, operation: (client: PoolClient) => Promise<T>): Promise<T> {
+    return this.runTransaction(async (client) => {
+      await client.query("SELECT set_config('app.tenant_id', $1, true)", [tenantId]);
+      return operation(client);
+    });
+  }
+
+  async controlPlaneTransaction<T>(operation: (client: PoolClient) => Promise<T>): Promise<T> {
+    return this.runTransaction(operation);
+  }
+
+  private async runTransaction<T>(operation: (client: PoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      await client.query("SELECT set_config('app.tenant_id', $1, true)", [tenantId]);
       const result = await operation(client);
       await client.query('COMMIT');
       return result;

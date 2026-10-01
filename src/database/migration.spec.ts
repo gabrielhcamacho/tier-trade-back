@@ -11,6 +11,8 @@ describe('commercial foundation migration', () => {
       '20261001000300_commercial_governance.sql',
       '20261001193311_harden_tenant_rls.sql',
       '20261001194949_optimize_tenant_rls.sql',
+      '20261001224302_control_plane_access.sql',
+      '20261001224527_index_control_invitation_inviter.sql',
     ]) {
       const migration = await readFile(new URL(`../../supabase/migrations/${migrationName}`, import.meta.url), 'utf8');
       await db.exec(migration);
@@ -19,6 +21,8 @@ describe('commercial foundation migration', () => {
       INSERT INTO app.tenants (id,legal_name,timezone) VALUES
         ('11111111-1111-4111-8111-111111111111','A','America/Sao_Paulo'),
         ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','B','America/Sao_Paulo');
+      INSERT INTO app.memberships (tenant_id,user_id,capabilities) VALUES
+        ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',ARRAY['COMMERCIAL_EDIT']);
       INSERT INTO app.counterparties (tenant_id,id,legal_name,tax_id) VALUES
         ('11111111-1111-4111-8111-111111111111','33333333-3333-4333-8333-333333333333','A supplier','1'),
         ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','B supplier','2');
@@ -29,6 +33,8 @@ describe('commercial foundation migration', () => {
       CREATE ROLE app_runtime NOLOGIN NOSUPERUSER NOBYPASSRLS;
       GRANT USAGE ON SCHEMA app TO app_runtime;
       GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA app TO app_runtime;
+      GRANT USAGE ON SCHEMA control TO app_runtime;
+      GRANT SELECT,INSERT,UPDATE ON ALL TABLES IN SCHEMA control TO app_runtime;
       SET ROLE app_runtime;
       SELECT set_config('app.tenant_id','11111111-1111-4111-8111-111111111111',false);
     `);
@@ -36,6 +42,12 @@ describe('commercial foundation migration', () => {
     expect(result.rows).toEqual([{ legal_name: 'A supplier' }]);
     const activity = await db.query<{ event_id: string }>('SELECT event_id FROM app.commercial_activity_read_model');
     expect(activity.rows).toEqual([{ event_id: '44444444-4444-4444-8444-444444444444' }]);
+    await db.exec('RESET ROLE');
+    const directory = await db.query<{ tenant_id: string }>(
+      `SELECT tenant_id FROM control.membership_directory
+        WHERE user_id='22222222-2222-4222-8222-222222222222' AND active=true`,
+    );
+    expect(directory.rows).toEqual([{ tenant_id: '11111111-1111-4111-8111-111111111111' }]);
     const readModels = await db.query<{ table_name: string }>(
       `SELECT table_name FROM information_schema.tables
         WHERE table_schema='app' AND table_name LIKE '%read_model' ORDER BY table_name`,

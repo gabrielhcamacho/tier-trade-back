@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { z } from 'zod';
 import { IdentityVerifierPort } from './supabase-jwt.verifier.js';
+import { TenantResolverPort } from './tenant-resolver.js';
 
 export interface RequestIdentity {
   tenantId: string;
@@ -33,7 +34,10 @@ export const Identity = createParamDecorator(
 
 @Injectable()
 export class RequestIdentityGuard implements CanActivate {
-  constructor(@Inject(IdentityVerifierPort) private readonly verifier: IdentityVerifierPort) {}
+  constructor(
+    @Inject(IdentityVerifierPort) private readonly verifier: IdentityVerifierPort,
+    @Inject(TenantResolverPort) private readonly tenantResolver: TenantResolverPort,
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<IdentityRequest>();
@@ -52,14 +56,12 @@ export class RequestIdentityGuard implements CanActivate {
     }
     if (mode !== 'supabase') throw new ForbiddenException({ code: 'UNKNOWN_AUTH_MODE' });
 
-    const tenantId = tenantSchema.safeParse(request.headers['x-tenant-id']);
     const authorization = request.headers.authorization;
     const match = typeof authorization === 'string' ? /^Bearer (\S+)$/.exec(authorization) : null;
-    if (!tenantId.success || !match?.[1]) {
-      throw new UnauthorizedException({ code: 'BEARER_TOKEN_AND_TENANT_REQUIRED' });
-    }
+    if (!match?.[1]) throw new UnauthorizedException({ code: 'BEARER_TOKEN_REQUIRED' });
     const verified = await this.verifier.verify(match[1]);
-    request.identity = { tenantId: tenantId.data, actorId: verified.actorId };
+    const tenantId = await this.tenantResolver.resolve(verified.actorId);
+    request.identity = { tenantId, actorId: verified.actorId };
     return true;
   }
 }

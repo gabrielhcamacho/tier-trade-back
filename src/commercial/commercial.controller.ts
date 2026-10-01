@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Inject, Param, ParseUUIDPipe, Patch, Post, Put, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiHeader, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Identity, type RequestIdentity, RequestIdentityGuard } from '../auth/request-identity.guard.js';
 import { SchemaPipe } from '../common/schema.pipe.js';
 import {
@@ -16,7 +16,6 @@ import { CommercialService } from './commercial.service.js';
 
 @ApiTags('commercial')
 @ApiBearerAuth()
-@ApiHeader({ name: 'x-tenant-id', required: true, description: 'Tenant selecionado; autorizado por membership.' })
 @UseGuards(RequestIdentityGuard)
 @Controller('v1')
 export class CommercialController {

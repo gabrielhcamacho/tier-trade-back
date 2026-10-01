@@ -1,0 +1,9 @@
+export const CAPABILITIES = [
+  'COMMERCIAL_EDIT',
+  'COMMERCIAL_APPROVE',
+  'COMMERCIAL_CANCEL',
+  'MARGIN_POLICY_MANAGE',
+  'ACCESS_MANAGE',
+] as const;
+
+export type Capability = (typeof CAPABILITIES)[number];
