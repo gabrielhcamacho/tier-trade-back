@@ -1,45 +1,80 @@
-import { Body, Controller, Get, Headers, Inject, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
-import { ApiHeader, ApiTags } from '@nestjs/swagger';
-import { DevelopmentIdentityGuard } from '../common/identity.guard.js';
+import { Body, Controller, Get, Inject, Param, ParseUUIDPipe, Patch, Post, Put, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiHeader, ApiTags } from '@nestjs/swagger';
+import { Identity, type RequestIdentity, RequestIdentityGuard } from '../auth/request-identity.guard.js';
 import { SchemaPipe } from '../common/schema.pipe.js';
-import { createOfferSchema, type CreateOfferInput } from './commercial.schemas.js';
+import {
+  cancelOfferSchema,
+  createOfferSchema,
+  marginPolicySchema,
+  type CancelOfferInput,
+  type CreateOfferInput,
+  type MarginPolicyInput,
+} from './commercial.schemas.js';
 import { CommercialService } from './commercial.service.js';
 
 @ApiTags('commercial')
-@ApiHeader({ name: 'x-tenant-id', required: true, description: 'Development only; replaced by trusted identity.' })
-@ApiHeader({ name: 'x-actor-id', required: true, description: 'Development only; replaced by trusted identity.' })
-@UseGuards(DevelopmentIdentityGuard)
+@ApiBearerAuth()
+@ApiHeader({ name: 'x-tenant-id', required: true, description: 'Tenant selecionado; autorizado por membership.' })
+@UseGuards(RequestIdentityGuard)
 @Controller('v1')
 export class CommercialController {
   constructor(@Inject(CommercialService) private readonly service: CommercialService) {}
 
+  @Get('counterparties')
+  counterparties(@Identity() identity: RequestIdentity) {
+    return this.service.listCounterparties(identity.tenantId, identity.actorId);
+  }
+
   @Post('offers')
-  create(@Headers('x-tenant-id') tenantId: string, @Headers('x-actor-id') actorId: string,
+  create(@Identity() identity: RequestIdentity,
     @Body(new SchemaPipe(createOfferSchema)) input: CreateOfferInput) {
-    return this.service.createOffer(tenantId, actorId, input);
+    return this.service.createOffer(identity.tenantId, identity.actorId, input);
+  }
+
+  @Put('offers/:offerId')
+  update(@Identity() identity: RequestIdentity, @Param('offerId', ParseUUIDPipe) offerId: string,
+    @Body(new SchemaPipe(createOfferSchema)) input: CreateOfferInput) {
+    return this.service.updateOffer(identity.tenantId, identity.actorId, offerId, input);
+  }
+
+  @Post('offers/:offerId/cancel')
+  cancel(@Identity() identity: RequestIdentity, @Param('offerId', ParseUUIDPipe) offerId: string,
+    @Body(new SchemaPipe(cancelOfferSchema)) input: CancelOfferInput) {
+    return this.service.cancelOffer(identity.tenantId, identity.actorId, offerId, input);
   }
 
   @Post('offers/:offerId/submit')
-  submit(@Headers('x-tenant-id') tenantId: string, @Headers('x-actor-id') actorId: string,
+  submit(@Identity() identity: RequestIdentity,
     @Param('offerId', ParseUUIDPipe) offerId: string) {
-    return this.service.submitOffer(tenantId, actorId, offerId);
+    return this.service.submitOffer(identity.tenantId, identity.actorId, offerId);
   }
 
   @Post('approvals/:approvalId/approve')
-  approve(@Headers('x-tenant-id') tenantId: string, @Headers('x-actor-id') actorId: string,
+  approve(@Identity() identity: RequestIdentity,
     @Param('approvalId', ParseUUIDPipe) approvalId: string) {
-    return this.service.approve(tenantId, actorId, approvalId);
+    return this.service.approve(identity.tenantId, identity.actorId, approvalId);
   }
 
   @Post('offers/:offerId/activate-contract')
-  activate(@Headers('x-tenant-id') tenantId: string, @Headers('x-actor-id') actorId: string,
+  activate(@Identity() identity: RequestIdentity,
     @Param('offerId', ParseUUIDPipe) offerId: string) {
-    return this.service.activateContract(tenantId, actorId, offerId);
+    return this.service.activateContract(identity.tenantId, identity.actorId, offerId);
   }
 
   @Get('contracts/:contractId/summary')
-  summary(@Headers('x-tenant-id') tenantId: string, @Headers('x-actor-id') actorId: string,
+  summary(@Identity() identity: RequestIdentity,
     @Param('contractId', ParseUUIDPipe) contractId: string) {
-    return this.service.contractSummary(tenantId, actorId, contractId);
+    return this.service.contractSummary(identity.tenantId, identity.actorId, contractId);
+  }
+
+  @Get('settings/margin-policy/MILHO')
+  policy(@Identity() identity: RequestIdentity) {
+    return this.service.currentMarginPolicy(identity.tenantId, identity.actorId, 'MILHO');
+  }
+
+  @Patch('settings/margin-policy')
+  configurePolicy(@Identity() identity: RequestIdentity,
+    @Body(new SchemaPipe(marginPolicySchema)) input: MarginPolicyInput) {
+    return this.service.configureMarginPolicy(identity.tenantId, identity.actorId, input);
   }
 }

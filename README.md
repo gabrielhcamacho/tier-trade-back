@@ -19,6 +19,8 @@ O worker é deliberadamente restrito a um tenant por execução. Ele materializa
 
 Swagger fica em `http://localhost:3001/docs`. Os cabeçalhos locais estão documentados em `.env.example` e no seed; eles não funcionam em produção.
 
+Em ambiente compartilhado, configure `AUTH_MODE=supabase` e `SUPABASE_URL`. A API aceita apenas o JWT de usuário no header Bearer; a escolha do tenant continua sujeita à membership ativa no banco.
+
 Sondas operacionais: `GET /health/live` verifica o processo e `GET /health/ready` verifica o banco.
 
 Leia `docs/first-slice.md` antes de ampliar o domínio.

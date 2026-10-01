@@ -1,12 +1,12 @@
 import { Module } from '@nestjs/common';
+import { AuthModule } from '../auth/auth.module.js';
 import { DatabaseModule } from '../database/database.js';
-import { DevelopmentIdentityGuard } from '../common/identity.guard.js';
 import { CommercialController } from './commercial.controller.js';
 import { CommercialService } from './commercial.service.js';
 
 @Module({
-  imports: [DatabaseModule],
+  imports: [DatabaseModule, AuthModule],
   controllers: [CommercialController],
-  providers: [CommercialService, DevelopmentIdentityGuard],
+  providers: [CommercialService],
 })
 export class CommercialModule {}

@@ -24,12 +24,16 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     await setup.query('DROP SCHEMA IF EXISTS app CASCADE');
     await setup.query(await readFile(new URL('../../migrations/0001_commercial_foundation.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../migrations/0002_outbox_read_models.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../migrations/0003_commercial_governance.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../scripts/seed-local.sql', import.meta.url), 'utf8'));
     await setup.end();
 
     process.env.DATABASE_URL = databaseUrl;
     process.env.NODE_ENV = 'development';
-    app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter(), { logger: false });
+    app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter(), {
+      logger: false,
+      abortOnError: false,
+    });
     await app.init();
     await app.getHttpAdapter().getInstance().ready();
   }, 30_000);
@@ -40,18 +44,34 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
 
   it('moves an offer requiring approval through to an active contract', async () => {
     const server = app.getHttpAdapter().getInstance();
+    const policy = await server.inject({
+      method: 'PATCH', url: '/v1/settings/margin-policy', headers: identityHeaders,
+      payload: { commodity: 'MILHO', autoApprovalMarginPerSc: '5.00', absoluteFloorMarginPerSc: '1.00' },
+    });
+    expect(policy.statusCode).toBe(200);
+    expect(policy.json()).toMatchObject({ version: 2, autoApprovalMarginPerSc: '5.00' });
+
+    const offerInput = {
+      counterpartyId: '33333333-3333-4333-8333-333333333333', commodity: 'MILHO', unit: 'SC_60KG',
+      quantitySc: '10000', deliveryStart: '2026-11-01', deliveryEnd: '2026-11-30',
+      purchasePricePerSc: '60.00', saleReferencePerSc: '67.50',
+      costs: [{ code: 'FREIGHT', amountPerSc: '4.00' }, { code: 'STORAGE', amountPerSc: '1.00' }],
+    };
     const created = await server.inject({
       method: 'POST', url: '/v1/offers', headers: identityHeaders,
-      payload: {
-        counterpartyId: '33333333-3333-4333-8333-333333333333', commodity: 'MILHO', unit: 'SC_60KG',
-        quantitySc: '10000', deliveryStart: '2026-11-01', deliveryEnd: '2026-11-30',
-        purchasePricePerSc: '60.00', saleReferencePerSc: '67.50',
-        costs: [{ code: 'FREIGHT', amountPerSc: '4.00' }, { code: 'STORAGE', amountPerSc: '1.00' }],
-      },
+      payload: offerInput,
     });
     expect(created.statusCode).toBe(201);
-    const offer = created.json();
+    let offer = created.json();
     expect(offer.pricing.projectedMarginPerSc).toBe('2.50');
+    const edited = await server.inject({
+      method: 'PUT', url: `/v1/offers/${offer.offerId}`, headers: identityHeaders,
+      payload: { ...offerInput, saleReferencePerSc: '68.00' },
+    });
+    expect(edited.statusCode).toBe(200);
+    offer = edited.json();
+    expect(offer).toMatchObject({ scenarioVersion: 2, policyVersion: 2 });
+    expect(offer.pricing.projectedMarginPerSc).toBe('3.00');
 
     const submitted = await server.inject({ method: 'POST', url: `/v1/offers/${offer.offerId}/submit`, headers: identityHeaders });
     expect(submitted.statusCode).toBe(201);
@@ -70,9 +90,24 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     expect(summary.json()).toMatchObject({ status: 'ACTIVE' });
     expect(summary.json().obligations).toHaveLength(2);
 
+    const cancellable = await server.inject({
+      method: 'POST', url: '/v1/offers', headers: identityHeaders, payload: offerInput,
+    });
+    const cancellableOffer = cancellable.json();
+    const cancelled = await server.inject({
+      method: 'POST', url: `/v1/offers/${cancellableOffer.offerId}/cancel`, headers: identityHeaders,
+      payload: { reason: 'Condições comerciais retiradas pela contraparte.' },
+    });
+    expect(cancelled.statusCode).toBe(201);
+    expect(cancelled.json().status).toBe('CANCELLED');
+    const invalidSubmission = await server.inject({
+      method: 'POST', url: `/v1/offers/${cancellableOffer.offerId}/submit`, headers: identityHeaders,
+    });
+    expect(invalidSubmission.statusCode).toBe(409);
+
     const processor = app.get(OutboxProcessor);
     const firstPass = await processor.processTenant(identityHeaders['x-tenant-id']);
-    expect(firstPass).toEqual({ claimed: 4, published: 4, failed: 0 });
+    expect(firstPass).toEqual({ claimed: 8, published: 8, failed: 0 });
     expect(await processor.processTenant(identityHeaders['x-tenant-id'])).toEqual({
       claimed: 0, published: 0, failed: 0,
     });
@@ -90,8 +125,8 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
         WHERE tenant_id=$1 AND contract_id=$2`,
       [identityHeaders['x-tenant-id'], contract.contractId],
     );
-    expect(activity.rows[0]?.count).toBe('4');
-    expect(projection.rows[0]?.projected_margin_per_sc).toBe('2.500000');
+    expect(activity.rows[0]?.count).toBe('8');
+    expect(projection.rows[0]?.projected_margin_per_sc).toBe('3.000000');
     expect(projection.rows[0]?.obligations).toHaveLength(2);
 
     const invalidEventId = randomUUID();

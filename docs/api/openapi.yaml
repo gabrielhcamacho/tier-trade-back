@@ -2,84 +2,133 @@ openapi: 3.1.0
 info:
   title: Tier Trade API
   version: 0.1.0
+security:
+  - bearerAuth: []
 paths:
   /health/live:
     get:
+      security: []
       summary: Verifica o processo da API
-      responses:
-        '200': { description: Processo saudável }
+      responses: { '200': { description: Processo saudável } }
   /health/ready:
     get:
+      security: []
       summary: Verifica a conexão com o banco
       responses:
         '200': { description: API pronta }
         '503': { description: Dependência indisponível }
+  /v1/counterparties:
+    get:
+      summary: Lista contrapartes do tenant selecionado
+      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      responses: { '200': { description: Contrapartes disponíveis } }
   /v1/offers:
     post:
       summary: Registra uma oferta e seu cenário determinístico
+      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateOffer' } } }
+      responses:
+        '201': { description: Oferta criada }
+        '422': { description: Regra de domínio inválida }
+  /v1/offers/{offerId}:
+    put:
+      summary: Cria nova versão do cenário de um rascunho
       parameters:
         - $ref: '#/components/parameters/TenantId'
-        - $ref: '#/components/parameters/ActorId'
+        - $ref: '#/components/parameters/OfferId'
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateOffer' } } }
+      responses:
+        '200': { description: Oferta e cenário atualizados }
+        '409': { description: Oferta não está em rascunho }
+  /v1/offers/{offerId}/cancel:
+    post:
+      summary: Cancela oferta antes da ativação do contrato
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/OfferId'
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/CreateOffer' }
+            schema:
+              type: object
+              required: [reason]
+              properties: { reason: { type: string, minLength: 3, maxLength: 500 } }
       responses:
-        '201': { description: Oferta criada }
-        '422': { description: Regra de domínio inválida }
+        '201': { description: Oferta cancelada }
+        '409': { description: Oferta já convertida ou cancelada }
   /v1/offers/{offerId}/submit:
     post:
       summary: Submete oferta à política de margem
       parameters:
         - $ref: '#/components/parameters/TenantId'
-        - $ref: '#/components/parameters/ActorId'
-        - { name: offerId, in: path, required: true, schema: { type: string, format: uuid } }
-      responses:
-        '201': { description: Decisão de submissão }
+        - $ref: '#/components/parameters/OfferId'
+      responses: { '201': { description: Decisão de submissão } }
   /v1/approvals/{approvalId}/approve:
     post:
       summary: Aprova uma exceção comercial
       parameters:
         - $ref: '#/components/parameters/TenantId'
-        - $ref: '#/components/parameters/ActorId'
         - { name: approvalId, in: path, required: true, schema: { type: string, format: uuid } }
-      responses:
-        '201': { description: Exceção aprovada }
+      responses: { '201': { description: Exceção aprovada } }
   /v1/offers/{offerId}/activate-contract:
     post:
       summary: Converte oferta aprovada em contrato ativo
       parameters:
         - $ref: '#/components/parameters/TenantId'
-        - $ref: '#/components/parameters/ActorId'
-        - { name: offerId, in: path, required: true, schema: { type: string, format: uuid } }
-      responses:
-        '201': { description: Contrato ativado }
+        - $ref: '#/components/parameters/OfferId'
+      responses: { '201': { description: Contrato ativado } }
   /v1/contracts/{contractId}/summary:
     get:
       summary: Retorna resumo operacional do contrato
       parameters:
         - $ref: '#/components/parameters/TenantId'
-        - $ref: '#/components/parameters/ActorId'
         - { name: contractId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses: { '200': { description: Resumo do contrato } }
+  /v1/settings/margin-policy/MILHO:
+    get:
+      summary: Retorna a política ativa de margem do milho
+      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      responses: { '200': { description: Política ativa } }
+  /v1/settings/margin-policy:
+    patch:
+      summary: Publica nova versão da política de margem
+      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [commodity, autoApprovalMarginPerSc, absoluteFloorMarginPerSc]
+              properties:
+                commodity: { const: MILHO }
+                autoApprovalMarginPerSc: { $ref: '#/components/schemas/DecimalString' }
+                absoluteFloorMarginPerSc: { $ref: '#/components/schemas/DecimalString' }
       responses:
-        '200': { description: Resumo do contrato }
+        '200': { description: Nova versão publicada }
+        '422': { description: Piso superior ao limite automático }
 components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
   parameters:
     TenantId:
       name: x-tenant-id
       in: header
       required: true
-      description: Somente desenvolvimento; será derivado da identidade confiável.
+      description: Contexto solicitado; a membership do ator verificado autoriza o acesso.
       schema: { type: string, format: uuid }
-    ActorId:
-      name: x-actor-id
-      in: header
+    OfferId:
+      name: offerId
+      in: path
       required: true
-      description: Somente desenvolvimento; será derivado da identidade confiável.
       schema: { type: string, format: uuid }
   schemas:
-    DecimalString: { type: string, pattern: '^\\d+(?:\\.\\d{1,6})?$' }
+    DecimalString: { type: string, pattern: '^\d+(?:\.\d{1,6})?$' }
     CreateOffer:
       type: object
       additionalProperties: false

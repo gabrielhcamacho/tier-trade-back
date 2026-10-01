@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { DatabasePlatformPort } from '../database/database.js';
 import { calculateProjectedMargin, decideSubmission } from '../domain/pricing.js';
-import type { CreateOfferInput } from './commercial.schemas.js';
+import type { CancelOfferInput, CreateOfferInput, MarginPolicyInput } from './commercial.schemas.js';
 
 interface MarginPolicyRow {
   id: string;
@@ -17,10 +17,17 @@ interface MarginPolicyRow {
 export class CommercialService {
   constructor(@Inject(DatabasePlatformPort) private readonly db: DatabasePlatformPort) {}
 
+  async listCounterparties(tenantId: string, actorId: string) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertMember(client, tenantId, actorId);
+      const result = await client.query<{ id: string; legal_name: string }>(
+        `SELECT id,legal_name FROM app.counterparties WHERE tenant_id=$1 ORDER BY legal_name,id`, [tenantId]);
+      return result.rows.map((row) => ({ id: row.id, legalName: row.legal_name }));
+    });
+  }
+
   async createOffer(tenantId: string, actorId: string, input: CreateOfferInput) {
-    if (input.deliveryEnd < input.deliveryStart) {
-      throw new UnprocessableEntityException({ code: 'INVALID_DELIVERY_WINDOW' });
-    }
+    this.assertDeliveryWindow(input);
     const pricing = calculateProjectedMargin(input);
     return this.db.transaction(tenantId, async (client) => {
       await this.assertMember(client, tenantId, actorId);
@@ -54,6 +61,115 @@ export class CommercialService {
     });
   }
 
+  async updateOffer(tenantId: string, actorId: string, offerId: string, input: CreateOfferInput) {
+    this.assertDeliveryWindow(input);
+    const pricing = calculateProjectedMargin(input);
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertMember(client, tenantId, actorId);
+      const offer = await this.db.one<{ status: string; created_by: string }>(client,
+        'SELECT status,created_by FROM app.offers WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [tenantId, offerId]);
+      if (offer.status !== 'DRAFT') throw new ConflictException({ code: 'ONLY_DRAFT_OFFERS_CAN_BE_EDITED' });
+      if (offer.created_by !== actorId) await this.assertCapability(client, tenantId, actorId, 'COMMERCIAL_EDIT');
+      const policy = await this.activeMarginPolicy(client, tenantId, input.commodity);
+      const previous = await this.db.one<{ id: string; version: number }>(client,
+        `SELECT id,version FROM app.pricing_scenarios
+          WHERE tenant_id=$1 AND offer_id=$2 AND is_current=true FOR UPDATE`, [tenantId, offerId]);
+      const scenarioId = randomUUID();
+      const scenarioVersion = previous.version + 1;
+      await client.query(
+        `UPDATE app.offers SET counterparty_id=$3,commodity=$4,unit=$5,quantity_sc=$6,
+           delivery_start=$7,delivery_end=$8,updated_at=now() WHERE tenant_id=$1 AND id=$2`,
+        [tenantId, offerId, input.counterpartyId, input.commodity, input.unit, input.quantitySc,
+          input.deliveryStart, input.deliveryEnd],
+      );
+      await client.query(
+        `UPDATE app.pricing_scenarios SET is_current=false
+          WHERE tenant_id=$1 AND offer_id=$2 AND is_current=true`, [tenantId, offerId]);
+      await client.query(
+        `INSERT INTO app.pricing_scenarios
+          (tenant_id,id,offer_id,policy_id,policy_version,purchase_price_per_sc,sale_reference_per_sc,
+           total_costs_per_sc,projected_margin_per_sc,cost_breakdown,created_by,version,is_current)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,true)`,
+        [tenantId, scenarioId, offerId, policy.id, policy.version, pricing.purchasePricePerSc,
+          pricing.saleReferencePerSc, pricing.totalCostsPerSc, pricing.projectedMarginPerSc,
+          JSON.stringify(input.costs), actorId, scenarioVersion],
+      );
+      await this.record(client, tenantId, actorId, 'offer.repriced', 'offer', offerId,
+        { scenarioId, replacedScenarioId: previous.id, scenarioVersion });
+      return { offerId, scenarioId, scenarioVersion, status: 'DRAFT', pricing, policyVersion: policy.version };
+    });
+  }
+
+  async cancelOffer(tenantId: string, actorId: string, offerId: string, input: CancelOfferInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertMember(client, tenantId, actorId);
+      const offer = await this.db.one<{ status: string; created_by: string }>(client,
+        'SELECT status,created_by FROM app.offers WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [tenantId, offerId]);
+      if (offer.status === 'CONVERTED') throw new ConflictException({ code: 'ACTIVE_CONTRACT_PREVENTS_CANCELLATION' });
+      if (offer.status === 'CANCELLED') throw new ConflictException({ code: 'OFFER_ALREADY_CANCELLED' });
+      if (offer.status !== 'DRAFT' || offer.created_by !== actorId) {
+        await this.assertCapability(client, tenantId, actorId, 'COMMERCIAL_CANCEL');
+      }
+      await client.query(
+        `UPDATE app.offers SET status='CANCELLED',cancelled_at=now(),cancelled_by=$3,
+           cancellation_reason=$4,updated_at=now() WHERE tenant_id=$1 AND id=$2`,
+        [tenantId, offerId, actorId, input.reason],
+      );
+      await client.query(
+        `UPDATE app.approvals SET status='CANCELLED',decided_by=$3,decided_at=now()
+          WHERE tenant_id=$1 AND offer_id=$2 AND status='PENDING'`, [tenantId, offerId, actorId]);
+      await this.record(client, tenantId, actorId, 'offer.cancelled', 'offer', offerId,
+        { previousStatus: offer.status, reason: input.reason });
+      return { offerId, status: 'CANCELLED', reason: input.reason };
+    });
+  }
+
+  async currentMarginPolicy(tenantId: string, actorId: string, commodity: 'MILHO') {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertMember(client, tenantId, actorId);
+      const policy = await this.activeMarginPolicy(client, tenantId, commodity);
+      return {
+        id: policy.id,
+        commodity,
+        version: policy.version,
+        autoApprovalMarginPerSc: policy.auto_approval_margin_per_sc,
+        absoluteFloorMarginPerSc: policy.absolute_floor_margin_per_sc,
+      };
+    });
+  }
+
+  async configureMarginPolicy(tenantId: string, actorId: string, input: MarginPolicyInput) {
+    if (new Decimal(input.autoApprovalMarginPerSc).lessThan(input.absoluteFloorMarginPerSc)) {
+      throw new UnprocessableEntityException({ code: 'AUTO_APPROVAL_BELOW_ABSOLUTE_FLOOR' });
+    }
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'MARGIN_POLICY_MANAGE');
+      const current = await client.query<MarginPolicyRow>(
+        `SELECT id,version,auto_approval_margin_per_sc,absolute_floor_margin_per_sc
+           FROM app.margin_policies WHERE tenant_id=$1 AND commodity=$2 AND active=true FOR UPDATE`,
+        [tenantId, input.commodity],
+      );
+      const version = (current.rows[0]?.version ?? 0) + 1;
+      const policyId = randomUUID();
+      await client.query(
+        'UPDATE app.margin_policies SET active=false WHERE tenant_id=$1 AND commodity=$2 AND active=true',
+        [tenantId, input.commodity],
+      );
+      await client.query(
+        `INSERT INTO app.margin_policies
+          (tenant_id,id,commodity,version,auto_approval_margin_per_sc,absolute_floor_margin_per_sc,active)
+         VALUES ($1,$2,$3,$4,$5,$6,true)`,
+        [tenantId, policyId, input.commodity, version, input.autoApprovalMarginPerSc,
+          input.absoluteFloorMarginPerSc],
+      );
+      await this.record(client, tenantId, actorId, 'margin_policy.changed', 'margin_policy', policyId,
+        { commodity: input.commodity, version, replacedPolicyId: current.rows[0]?.id ?? null });
+      return { policyId, commodity: input.commodity, version,
+        autoApprovalMarginPerSc: input.autoApprovalMarginPerSc,
+        absoluteFloorMarginPerSc: input.absoluteFloorMarginPerSc };
+    });
+  }
+
   async submitOffer(tenantId: string, actorId: string, offerId: string) {
     return this.db.transaction(tenantId, async (client) => {
       await this.assertMember(client, tenantId, actorId);
@@ -62,7 +178,7 @@ export class CommercialService {
         `SELECT o.status, s.projected_margin_per_sc, p.id, p.version,
                 p.auto_approval_margin_per_sc, p.absolute_floor_margin_per_sc
            FROM app.offers o
-           JOIN app.pricing_scenarios s ON (s.tenant_id, s.offer_id) = (o.tenant_id, o.id)
+           JOIN app.pricing_scenarios s ON (s.tenant_id, s.offer_id) = (o.tenant_id, o.id) AND s.is_current=true
            JOIN app.margin_policies p ON (p.tenant_id, p.id) = (s.tenant_id, s.policy_id)
           WHERE o.tenant_id=$1 AND o.id=$2`,
         [tenantId, offerId],
@@ -137,7 +253,7 @@ export class CommercialService {
                   FILTER (WHERE ob.id IS NOT NULL), '[]'::jsonb) AS obligations
            FROM app.contracts c
            JOIN app.offers o ON (o.tenant_id,o.id)=(c.tenant_id,c.offer_id)
-           JOIN app.pricing_scenarios s ON (s.tenant_id,s.offer_id)=(o.tenant_id,o.id)
+           JOIN app.pricing_scenarios s ON (s.tenant_id,s.offer_id)=(o.tenant_id,o.id) AND s.is_current=true
            LEFT JOIN app.contract_obligations ob ON (ob.tenant_id,ob.contract_id)=(c.tenant_id,c.id)
           WHERE c.tenant_id=$1 AND c.id=$2
           GROUP BY c.id,c.status,o.commodity,o.unit,o.quantity_sc,o.delivery_start,o.delivery_end,
@@ -159,6 +275,19 @@ export class CommercialService {
       `SELECT 1 FROM app.memberships WHERE tenant_id=$1 AND user_id=$2 AND active=true
         AND $3 = ANY(capabilities)`, [tenantId, actorId, capability]);
     if (result.rowCount !== 1) throw new NotFoundException({ code: 'CAPABILITY_NOT_FOUND' });
+  }
+
+  private assertDeliveryWindow(input: CreateOfferInput) {
+    if (input.deliveryEnd < input.deliveryStart) {
+      throw new UnprocessableEntityException({ code: 'INVALID_DELIVERY_WINDOW' });
+    }
+  }
+
+  private activeMarginPolicy(client: PoolClient, tenantId: string, commodity: string) {
+    return this.db.one<MarginPolicyRow>(client,
+      `SELECT id,version,auto_approval_margin_per_sc,absolute_floor_margin_per_sc
+         FROM app.margin_policies WHERE tenant_id=$1 AND commodity=$2 AND active=true`,
+      [tenantId, commodity]);
   }
 
   private async record(client: PoolClient, tenantId: string, actorId: string, eventType: string,

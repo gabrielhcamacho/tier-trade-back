@@ -21,3 +21,16 @@ export const createOfferSchema = z.object({
 });
 
 export type CreateOfferInput = z.infer<typeof createOfferSchema>;
+
+export const cancelOfferSchema = z.object({
+  reason: z.string().trim().min(3).max(500),
+});
+
+export const marginPolicySchema = z.object({
+  commodity: z.literal('MILHO'),
+  autoApprovalMarginPerSc: decimalString,
+  absoluteFloorMarginPerSc: decimalString,
+});
+
+export type CancelOfferInput = z.infer<typeof cancelOfferSchema>;
+export type MarginPolicyInput = z.infer<typeof marginPolicySchema>;

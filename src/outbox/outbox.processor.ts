@@ -109,7 +109,7 @@ export class OutboxProcessor {
                 FILTER (WHERE ob.id IS NOT NULL),'[]'::jsonb),$3
          FROM app.contracts c
          JOIN app.offers o ON (o.tenant_id,o.id)=(c.tenant_id,c.offer_id)
-         JOIN app.pricing_scenarios s ON (s.tenant_id,s.offer_id)=(o.tenant_id,o.id)
+         JOIN app.pricing_scenarios s ON (s.tenant_id,s.offer_id)=(o.tenant_id,o.id) AND s.is_current=true
          LEFT JOIN app.contract_obligations ob ON (ob.tenant_id,ob.contract_id)=(c.tenant_id,c.id)
         WHERE c.tenant_id=$1 AND c.id=$2
         GROUP BY c.tenant_id,c.id,c.offer_id,c.status,o.commodity,o.unit,o.quantity_sc,o.delivery_start,

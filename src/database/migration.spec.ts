@@ -5,7 +5,11 @@ import { describe, expect, it } from 'vitest';
 describe('commercial foundation migration', () => {
   it('applies and isolates rows through the transaction tenant context', async () => {
     const db = new PGlite();
-    for (const migrationName of ['0001_commercial_foundation.sql', '0002_outbox_read_models.sql']) {
+    for (const migrationName of [
+      '0001_commercial_foundation.sql',
+      '0002_outbox_read_models.sql',
+      '0003_commercial_governance.sql',
+    ]) {
       const migration = await readFile(new URL(`../../migrations/${migrationName}`, import.meta.url), 'utf8');
       await db.exec(migration);
     }

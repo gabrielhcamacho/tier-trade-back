@@ -6,6 +6,9 @@
 | `offer.submitted` | offer | política de margem aplicada | fila de trabalho comercial |
 | `offer.approved` | offer | aprovador decide exceção | fila de contratos |
 | `contract.activated` | contract | contrato e obrigações criados | execução física futura |
+| `offer.repriced` | offer | rascunho recalculado em novo cenário | auditoria, projeções |
+| `offer.cancelled` | offer | oferta cancelada antes do contrato | auditoria, projeções |
+| `margin_policy.changed` | margin_policy | tenant publica nova versão | auditoria, projeções |
 
 Todos carregam `id`, `tenant_id`, tipo, agregado, payload mínimo e instante. A outbox é gravada na mesma transação da mudança. Publicação é pelo menos uma vez; consumidores deduplicam por `id`.
 
