@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 
-export const DEMO_SEED_VERSION = 5;
+export const DEMO_SEED_VERSION = 6;
 
 export type ResetDemoTenantInput = {
   tenantId: string;
@@ -24,6 +24,7 @@ export type ResetDemoTenantResult = {
   financialEvents: number;
   financialTitles: number;
   financialSettlements: number;
+  riskPolicies: number;
 };
 
 const ids = {
@@ -87,6 +88,7 @@ const ids = {
     title: 'e1000000-0000-4000-8000-000000000001',
     settlement: 'e2000000-0000-4000-8000-000000000001',
   },
+  riskPolicy: 'e3000000-0000-4000-8000-000000000001',
 } as const;
 
 export async function resetDemoTenant(
@@ -114,7 +116,7 @@ export async function resetDemoTenant(
     if (membership.rowCount !== 1) throw new Error('ACTIVE_DEMO_ACTOR_MEMBERSHIP_NOT_FOUND');
     const capabilities = membership.rows[0]?.capabilities ?? [];
     if (!capabilities.includes('COMMERCIAL_EDIT') || !capabilities.includes('OPERATIONS_EDIT')
-      || !capabilities.includes('FINANCE_EDIT')) {
+      || !capabilities.includes('FINANCE_EDIT') || !capabilities.includes('RISK_MANAGE')) {
       throw new Error('DEMO_ACTOR_CAPABILITIES_INCOMPLETE');
     }
 
@@ -153,6 +155,7 @@ export async function resetDemoTenant(
       financialEvents: 1,
       financialTitles: 1,
       financialSettlements: 1,
+      riskPolicies: 1,
     };
   } catch (error) {
     await client.query('ROLLBACK');
@@ -163,6 +166,7 @@ export async function resetDemoTenant(
 }
 
 async function clearOperationalData(client: PoolClient, tenantId: string, actorId: string): Promise<void> {
+  await client.query('SELECT app.delete_demo_risk($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_finance($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_sales_fulfillment($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_inventory($1,$2)', [tenantId, actorId]);
@@ -364,6 +368,12 @@ async function seedOperationalData(client: PoolClient, input: ResetDemoTenantInp
        'Recebimento parcial fictício para demonstração.',$4,'2026-10-02T13:05:00Z')`,
     [tenantId, ids.finance.settlement, ids.finance.title, actorId],
   );
+  await client.query(
+    `INSERT INTO app.risk_policies
+      (tenant_id,id,commodity,version,max_net_open_kg,warning_threshold_pct,active,created_by,created_at)
+     VALUES ($1,$2,'MILHO',1,2100000.000,80.00,true,$3,'2026-10-01T12:00:00Z')`,
+    [tenantId, ids.riskPolicy, actorId],
+  );
 
   await seedReadModelsAndAudit(client, input);
 }
@@ -382,6 +392,7 @@ async function seedReadModelsAndAudit(client: PoolClient, input: ResetDemoTenant
     { id: randomUUID(), type: 'finance.forecast_projected', aggregate: 'financial_event', aggregateId: ids.finance.event, occurredAt: '2026-10-01T16:05:00Z', payload: { sourceId: ids.fulfillment.dispatch, calculatedAmount: '11360.00' } },
     { id: randomUUID(), type: 'finance.title_issued', aggregate: 'financial_title', aggregateId: ids.finance.title, occurredAt: '2026-10-01T16:20:00Z', payload: { financialEventId: ids.finance.event, amount: '11360.00' } },
     { id: randomUUID(), type: 'finance.receipt_recorded', aggregate: 'financial_settlement', aggregateId: ids.finance.settlement, occurredAt: '2026-10-02T13:05:00Z', payload: { titleId: ids.finance.title, amount: '4000.00' } },
+    { id: randomUUID(), type: 'risk.policy_configured', aggregate: 'risk_policy', aggregateId: ids.riskPolicy, occurredAt: '2026-10-01T12:00:00Z', payload: { commodity: 'MILHO', version: 1, maxNetOpenKg: '2100000.000', warningThresholdPct: '80.00' } },
     { id: resetEvent, type: 'demo.seed_reset', aggregate: 'tenant', aggregateId: input.tenantId, occurredAt: new Date().toISOString(), payload: {} },
   ];
   for (const event of events) {

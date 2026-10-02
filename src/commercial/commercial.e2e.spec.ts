@@ -38,6 +38,8 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     await setup.query(await readFile(new URL('../../supabase/migrations/20261002174124_inventory_receipt_ledger.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261002211618_sales_fulfillment_slice.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261002220831_financial_receivables_slice.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261002224025_risk_position_slice.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261002224945_cover_operational_foreign_keys.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../scripts/seed-local.sql', import.meta.url), 'utf8'));
     await setup.end();
 

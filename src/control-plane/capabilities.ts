@@ -6,6 +6,7 @@ export const CAPABILITIES = [
   'ACCESS_MANAGE',
   'OPERATIONS_EDIT',
   'FINANCE_EDIT',
+  'RISK_MANAGE',
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];

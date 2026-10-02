@@ -40,3 +40,7 @@ Todos carregam `id`, `tenant_id`, tipo, agregado, payload mínimo e instante. A 
 - falha, retentativa e recuperação geram logs JSON sem payload de negócio.
 
 O schema será versionado antes do primeiro consumidor externo. Esse transporte terá controle de entrega próprio para não confundir projeção interna com publicação fora do processo.
+
+# Risco
+
+- `risk.policy_configured`: nova versão do limite por commodity, com política substituída e valores usados.

@@ -13,6 +13,7 @@
 - ferramenta de observabilidade e retenção dos sinais;
 - integração com Mountier Agro;
 - regras fiscais, contábeis, arredondamento monetário por tenant e descontos de qualidade;
+- pacote inicial de risco de mercado: fonte, praça, instrumentos, periodicidade, curva, base, câmbio e responsabilidade de execução;
 - nome comercial definitivo do produto.
 
 ## Resolvidas
@@ -26,3 +27,4 @@
 - SSL do banco está obrigatório e as sete migrations locais estão alinhadas ao remoto;
 - piloto e produção usarão projetos Supabase separados.
 - expedições de venda geram previsão financeira; títulos e baixas são registros separados, auditados e reversíveis.
+- posição física, contratual e financeira usa registros oficiais; limites de posição são configuráveis e versionados por tenant.

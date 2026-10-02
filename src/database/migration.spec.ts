@@ -22,6 +22,8 @@ describe('commercial foundation migration', () => {
       '20261002174124_inventory_receipt_ledger.sql',
       '20261002211618_sales_fulfillment_slice.sql',
       '20261002220831_financial_receivables_slice.sql',
+      '20261002224025_risk_position_slice.sql',
+      '20261002224945_cover_operational_foreign_keys.sql',
     ]) {
       const migration = await readFile(new URL(`../../supabase/migrations/${migrationName}`, import.meta.url), 'utf8');
       await db.exec(migration);
@@ -74,6 +76,8 @@ describe('commercial foundation migration', () => {
     expect(visibleLots.rows).toEqual([{ count: 0 }]);
     const visibleMovements = await db.query<{ count: number }>('SELECT count(*)::int AS count FROM app.inventory_movements');
     expect(visibleMovements.rows).toEqual([{ count: 0 }]);
+    const visibleRiskPolicies = await db.query<{ count: number }>('SELECT count(*)::int AS count FROM app.risk_policies');
+    expect(visibleRiskPolicies.rows).toEqual([{ count: 0 }]);
     await db.exec('RESET ROLE');
     await db.close();
   });
