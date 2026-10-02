@@ -34,6 +34,7 @@ interface MovementRow {
   movement_type: string;
   quantity_delta_kg: string;
   occurred_at: Date;
+  created_at: Date;
 }
 
 @Injectable()
@@ -78,11 +79,11 @@ export class InventoryService extends InventoryReceiptPort {
       );
       const movements = await client.query<MovementRow>(
         `SELECT m.id,m.lot_id,lot.lot_code,m.source_load_id,m.source_receipt_id,
-                m.movement_type,m.quantity_delta_kg::text,m.occurred_at
+                m.movement_type,m.quantity_delta_kg::text,m.occurred_at,m.created_at
            FROM app.inventory_movements m
            JOIN app.inventory_lots lot ON (lot.tenant_id,lot.id)=(m.tenant_id,m.lot_id)
           WHERE m.tenant_id=$1
-          ORDER BY m.occurred_at DESC,m.id DESC`,
+          ORDER BY m.created_at DESC,m.id DESC`,
         [tenantId],
       );
 
@@ -138,6 +139,7 @@ export class InventoryService extends InventoryReceiptPort {
           type: row.movement_type,
           quantityDeltaKg: row.quantity_delta_kg,
           occurredAt: row.occurred_at.toISOString(),
+          recordedAt: row.created_at.toISOString(),
         })),
       };
     });
