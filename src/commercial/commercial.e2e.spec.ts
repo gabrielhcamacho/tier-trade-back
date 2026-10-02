@@ -32,6 +32,7 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     await setup.query(await readFile(new URL('../../supabase/migrations/20261001224302_control_plane_access.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261001224527_index_control_invitation_inviter.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261002030013_operations_load_scheduling.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261002042905_demo_tenant_contract_portfolio.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../scripts/seed-local.sql', import.meta.url), 'utf8'));
     await setup.end();
 
@@ -144,6 +145,20 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
       summary: { count: 1, scheduledWeightKg: '48000.000', availableWeightKg: '552000.000' },
     });
     expect(agenda.json().items).toHaveLength(1);
+    const contracts = await server.inject({ method: 'GET', url: '/v1/contracts', headers: identityHeaders });
+    expect(contracts.statusCode).toBe(200);
+    expect(contracts.json()).toMatchObject({
+      tenant: { legalName: 'Tenant local', isDemo: false, demoSeedVersion: null },
+      items: [{
+        id: contract.contractId,
+        counterparty_name: 'Cooperativa Teste do Cerrado',
+        status: 'ACTIVE',
+        load_count: 1,
+        scheduled_weight_kg: '48000.000',
+        available_weight_kg: '552000.000',
+        pending_obligations: 2,
+      }],
+    });
     const overflow = await server.inject({
       method: 'POST', url: `/v1/contracts/${contract.contractId}/loads`, headers: identityHeaders,
       payload: {

@@ -68,6 +68,11 @@ export class CommercialController {
     return this.service.activateContract(identity.tenantId, identity.actorId, offerId);
   }
 
+  @Get('contracts')
+  contracts(@Identity() identity: RequestIdentity) {
+    return this.service.listContracts(identity.tenantId, identity.actorId);
+  }
+
   @Get('contracts/:contractId/summary')
   summary(@Identity() identity: RequestIdentity,
     @Param('contractId', ParseUUIDPipe) contractId: string) {

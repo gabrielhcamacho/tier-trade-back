@@ -269,6 +269,57 @@ export class CommercialService {
     });
   }
 
+  async listContracts(tenantId: string, actorId: string) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertMember(client, tenantId, actorId);
+      const tenant = await this.db.one<{ legal_name: string; is_demo: boolean; demo_seed_version: number | null }>(
+        client,
+        `SELECT legal_name,is_demo,demo_seed_version FROM app.tenants WHERE id=$1`,
+        [tenantId],
+      );
+      const result = await client.query(
+        `SELECT c.id,c.status,c.activated_at::text,
+                cp.legal_name AS counterparty_name,
+                o.commodity,o.unit,o.quantity_sc,
+                o.delivery_start::text,o.delivery_end::text,
+                s.purchase_price_per_sc,s.projected_margin_per_sc,
+                COALESCE(load_totals.load_count,0)::integer AS load_count,
+                COALESCE(load_totals.scheduled_weight_kg,0)::numeric(20,3) AS scheduled_weight_kg,
+                GREATEST(o.quantity_sc * 60 - COALESCE(load_totals.scheduled_weight_kg,0),0)::numeric(20,3)
+                  AS available_weight_kg,
+                COALESCE(obligation_totals.pending_obligations,0)::integer AS pending_obligations
+           FROM app.contracts c
+           JOIN app.offers o ON (o.tenant_id,o.id)=(c.tenant_id,c.offer_id)
+           JOIN app.counterparties cp
+             ON (cp.tenant_id,cp.id)=(o.tenant_id,o.counterparty_id)
+           JOIN app.pricing_scenarios s
+             ON (s.tenant_id,s.offer_id)=(o.tenant_id,o.id) AND s.is_current=true
+           LEFT JOIN LATERAL (
+             SELECT count(*)::integer AS load_count,
+                    COALESCE(sum(l.expected_weight_kg),0)::numeric(20,3) AS scheduled_weight_kg
+               FROM app.loads l
+              WHERE l.tenant_id=c.tenant_id AND l.contract_id=c.id AND l.status <> 'CANCELLED'
+           ) load_totals ON true
+           LEFT JOIN LATERAL (
+             SELECT count(*) FILTER (WHERE ob.status='PENDING')::integer AS pending_obligations
+               FROM app.contract_obligations ob
+              WHERE ob.tenant_id=c.tenant_id AND ob.contract_id=c.id
+           ) obligation_totals ON true
+          WHERE c.tenant_id=$1
+          ORDER BY c.activated_at DESC,c.id DESC`,
+        [tenantId],
+      );
+      return {
+        tenant: {
+          legalName: tenant.legal_name,
+          isDemo: tenant.is_demo,
+          demoSeedVersion: tenant.demo_seed_version,
+        },
+        items: result.rows,
+      };
+    });
+  }
+
   async contractSummary(tenantId: string, actorId: string, contractId: string) {
     return this.db.transaction(tenantId, async (client) => {
       await this.assertMember(client, tenantId, actorId);
@@ -277,16 +328,22 @@ export class CommercialService {
                 o.delivery_start::text AS delivery_start, o.delivery_end::text AS delivery_end,
                 s.purchase_price_per_sc, s.sale_reference_per_sc, s.total_costs_per_sc,
                 s.projected_margin_per_sc, s.policy_version,
+                COALESCE(load_totals.load_count,0)::integer AS load_count,
                 COALESCE(jsonb_agg(jsonb_build_object('code', ob.code, 'status', ob.status))
                   FILTER (WHERE ob.id IS NOT NULL), '[]'::jsonb) AS obligations
            FROM app.contracts c
            JOIN app.offers o ON (o.tenant_id,o.id)=(c.tenant_id,c.offer_id)
            JOIN app.pricing_scenarios s ON (s.tenant_id,s.offer_id)=(o.tenant_id,o.id) AND s.is_current=true
+           LEFT JOIN LATERAL (
+             SELECT count(*)::integer AS load_count
+               FROM app.loads l
+              WHERE l.tenant_id=c.tenant_id AND l.contract_id=c.id AND l.status <> 'CANCELLED'
+           ) load_totals ON true
            LEFT JOIN app.contract_obligations ob ON (ob.tenant_id,ob.contract_id)=(c.tenant_id,c.id)
           WHERE c.tenant_id=$1 AND c.id=$2
           GROUP BY c.id,c.status,o.commodity,o.unit,o.quantity_sc,o.delivery_start,o.delivery_end,
                    s.purchase_price_per_sc,s.sale_reference_per_sc,s.total_costs_per_sc,
-                   s.projected_margin_per_sc,s.policy_version`, [tenantId, contractId]);
+                   s.projected_margin_per_sc,s.policy_version,load_totals.load_count`, [tenantId, contractId]);
       if (!result.rows[0]) throw new NotFoundException({ code: 'CONTRACT_NOT_FOUND' });
       return result.rows[0];
     });
