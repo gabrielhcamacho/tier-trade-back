@@ -2,8 +2,10 @@
 
 ## Bloqueiam ambiente compartilhado
 
-1. Projeto Supabase e ambientes definitivos, incluindo domínio, SMTP e URLs de redirecionamento.
-2. Topologia dos ambientes gerenciados e política de residência/backup.
+1. Domínios definitivos do web e da API, SMTP transacional e URLs públicas de redirecionamento.
+2. Plano Supabase, RPO/RTO, retenção e PITR para produção.
+3. Aceite formal de `sa-east-1` para residência dos dados de produção.
+4. Provedor de hosting e IPs de saída para restringir a rede do banco.
 
 ## Não bloqueiam o desenvolvimento local da primeira fatia
 
@@ -20,3 +22,6 @@
 - a primeira slice está tecnicamente homologada para edição e cancelamento controlados.
 - o Control Plane mínimo resolve um único tenant ativo por usuário e coordena convite, membership e capabilities;
 - no MVP, o convite parte da API administrativa; a origem será substituída pelo painel interno comercial sem mudar o contrato de acesso.
+- o projeto `Tier trade geral` em `sa-east-1` é o ambiente compartilhado do piloto;
+- SSL do banco está obrigatório e as sete migrations locais estão alinhadas ao remoto;
+- piloto e produção usarão projetos Supabase separados.

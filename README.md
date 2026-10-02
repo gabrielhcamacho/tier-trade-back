@@ -21,6 +21,8 @@ Swagger fica em `http://localhost:3001/docs`. Os cabeçalhos locais estão docum
 
 Em ambiente compartilhado, configure `AUTH_MODE=supabase`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY` e `WEB_URL`. A API aceita apenas o JWT de usuário no header Bearer e resolve automaticamente o único tenant ativo no Control Plane. A secret key fica exclusivamente no backend e é usada somente para o convite administrativo.
 
+Antes de iniciar um processo compartilhado ou de produção, execute `TIER_TRADE_PROCESS=api pnpm environment:check` ou `TIER_TRADE_PROCESS=worker pnpm environment:check`. Em produção, o gate exige URLs públicas HTTPS e conexão PostgreSQL com `sslmode=verify-full` e `sslrootcert`.
+
 `POST /v1/access/invitations` exige `ACCESS_MANAGE`, envia o convite para definição de senha e cria a membership com capabilities explícitas. `GET /v1/session` retorna o tenant resolvido e as capabilities do usuário autenticado.
 
 Sondas operacionais: `GET /health/live` verifica o processo e `GET /health/ready` verifica o banco.

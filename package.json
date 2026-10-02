@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
     "dev": "tsx watch src/main.ts",
+    "environment:check": "tsx src/config/check-environment.ts",
     "worker:outbox": "tsx src/outbox/worker.ts",
     "test": "vitest run",
     "test:watch": "vitest"
