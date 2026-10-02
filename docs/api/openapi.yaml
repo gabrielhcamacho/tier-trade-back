@@ -110,6 +110,47 @@ paths:
       parameters:
         - { name: contractId, in: path, required: true, schema: { type: string, format: uuid } }
       responses: { '200': { description: Resumo do contrato } }
+  /v1/contracts/{contractId}/loads:
+    get:
+      summary: Lista a agenda e os saldos físicos do contrato
+      parameters:
+        - { name: contractId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses: { '200': { description: Agenda operacional } }
+    post:
+      summary: Programa uma carga e reserva saldo do contrato
+      parameters:
+        - { name: contractId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '201': { description: Carga programada }
+        '422': { description: Janela ou saldo contratual inválido }
+  /v1/loads/{loadId}:
+    get:
+      summary: Retorna carga, recebimento vigente, versões e eventos auditados
+      parameters:
+        - { name: loadId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses: { '200': { description: Detalhe operacional da carga } }
+  /v1/loads/{loadId}/start-receiving:
+    post:
+      summary: Move uma carga programada para recebimento
+      parameters:
+        - { name: loadId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '201': { description: Recebimento iniciado }
+        '409': { description: Estado da carga incompatível }
+  /v1/loads/{loadId}/receipt:
+    put:
+      summary: Registra uma nova versão de pesagem e classificação
+      parameters:
+        - { name: loadId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RecordLoadReceipt' }
+      responses:
+        '200': { description: Registro criado ou corrigido em nova versão }
+        '409': { description: Recebimento ainda não iniciado }
+        '422': { description: Pesos ou evidência de contingência inválidos }
   /v1/settings/margin-policy/MILHO:
     get:
       summary: Retorna a política ativa de margem do milho
@@ -143,7 +184,7 @@ components:
   schemas:
     Capability:
       type: string
-      enum: [COMMERCIAL_EDIT, COMMERCIAL_APPROVE, COMMERCIAL_CANCEL, MARGIN_POLICY_MANAGE, ACCESS_MANAGE]
+      enum: [COMMERCIAL_EDIT, COMMERCIAL_APPROVE, COMMERCIAL_CANCEL, MARGIN_POLICY_MANAGE, ACCESS_MANAGE, OPERATIONS_EDIT]
     DecimalString: { type: string, pattern: '^\d+(?:\.\d{1,6})?$' }
     CreateOffer:
       type: object
@@ -166,3 +207,19 @@ components:
             properties:
               code: { enum: [FREIGHT, STORAGE, QUALITY, FINANCIAL, OTHER] }
               amountPerSc: { $ref: '#/components/schemas/DecimalString' }
+    RecordLoadReceipt:
+      type: object
+      additionalProperties: false
+      required: [receivedAt, grossWeightKg, tareWeightKg, weighingMode, moisturePct, impurityPct, damagedPct, qualityDecision]
+      properties:
+        receivedAt: { type: string, format: date-time }
+        grossWeightKg: { type: string, pattern: '^\d+(?:\.\d{1,3})?$' }
+        tareWeightKg: { type: string, pattern: '^\d+(?:\.\d{1,3})?$' }
+        weighingMode: { enum: [SCALE, MANUAL_CONTINGENCY] }
+        scaleTicketNumber: { type: [string, 'null'], maxLength: 80 }
+        contingencyReason: { type: [string, 'null'], minLength: 10, maxLength: 500 }
+        moisturePct: { type: string, pattern: '^\d+(?:\.\d{1,4})?$' }
+        impurityPct: { type: string, pattern: '^\d+(?:\.\d{1,4})?$' }
+        damagedPct: { type: string, pattern: '^\d+(?:\.\d{1,4})?$' }
+        qualityDecision: { enum: [ACCEPTED, REVIEW_REQUIRED] }
+        notes: { type: [string, 'null'], maxLength: 1000 }

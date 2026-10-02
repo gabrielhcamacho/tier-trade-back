@@ -17,6 +17,8 @@ describe('commercial foundation migration', () => {
       '20261002030013_operations_load_scheduling.sql',
       '20261002031951_grant_operations_runtime.sql',
       '20261002042905_demo_tenant_contract_portfolio.sql',
+      '20261002162513_operations_receiving_quality.sql',
+      '20261002163915_grant_demo_reset_load_receipts.sql',
     ]) {
       const migration = await readFile(new URL(`../../supabase/migrations/${migrationName}`, import.meta.url), 'utf8');
       await db.exec(migration);
@@ -63,6 +65,8 @@ describe('commercial foundation migration', () => {
     await db.exec("SET ROLE tier_trade_runtime; SELECT set_config('app.tenant_id','11111111-1111-4111-8111-111111111111',false)");
     const visibleLoads = await db.query<{ count: number }>('SELECT count(*)::int AS count FROM app.loads');
     expect(visibleLoads.rows).toEqual([{ count: 0 }]);
+    const visibleReceipts = await db.query<{ count: number }>('SELECT count(*)::int AS count FROM app.load_receipts');
+    expect(visibleReceipts.rows).toEqual([{ count: 0 }]);
     await db.exec('RESET ROLE');
     await db.close();
   });

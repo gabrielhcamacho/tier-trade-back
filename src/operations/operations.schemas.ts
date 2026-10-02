@@ -15,3 +15,30 @@ export const scheduleLoadSchema = z.object({
 });
 
 export type ScheduleLoadInput = z.infer<typeof scheduleLoadSchema>;
+
+const percentageDecimal = z.string()
+  .regex(/^\d+(?:\.\d{1,4})?$/, 'Expected a percentage with up to four decimal places.')
+  .refine((value) => Number(value) <= 100, 'Percentage cannot exceed 100.');
+
+export const recordLoadReceiptSchema = z.object({
+  receivedAt: z.iso.datetime({ offset: true }),
+  grossWeightKg: positiveDecimal,
+  tareWeightKg: positiveDecimal,
+  weighingMode: z.enum(['SCALE', 'MANUAL_CONTINGENCY']),
+  scaleTicketNumber: z.string().trim().min(1).max(80).nullable(),
+  contingencyReason: z.string().trim().min(10).max(500).nullable(),
+  moisturePct: percentageDecimal,
+  impurityPct: percentageDecimal,
+  damagedPct: percentageDecimal,
+  qualityDecision: z.enum(['ACCEPTED', 'REVIEW_REQUIRED']),
+  notes: z.string().trim().min(1).max(1000).nullable(),
+}).superRefine((value, context) => {
+  if (value.weighingMode === 'SCALE' && !value.scaleTicketNumber) {
+    context.addIssue({ code: 'custom', path: ['scaleTicketNumber'], message: 'Scale ticket is required.' });
+  }
+  if (value.weighingMode === 'MANUAL_CONTINGENCY' && !value.contingencyReason) {
+    context.addIssue({ code: 'custom', path: ['contingencyReason'], message: 'Contingency reason is required.' });
+  }
+});
+
+export type RecordLoadReceiptInput = z.infer<typeof recordLoadReceiptSchema>;

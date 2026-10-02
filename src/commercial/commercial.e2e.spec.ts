@@ -33,6 +33,8 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     await setup.query(await readFile(new URL('../../supabase/migrations/20261001224527_index_control_invitation_inviter.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261002030013_operations_load_scheduling.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261002042905_demo_tenant_contract_portfolio.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261002162513_operations_receiving_quality.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261002163915_grant_demo_reset_load_receipts.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../scripts/seed-local.sql', import.meta.url), 'utf8'));
     await setup.end();
 
@@ -145,6 +147,48 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
       summary: { count: 1, scheduledWeightKg: '48000.000', availableWeightKg: '552000.000' },
     });
     expect(agenda.json().items).toHaveLength(1);
+    const started = await server.inject({
+      method: 'POST', url: `/v1/loads/${scheduledLoad.json().id}/start-receiving`, headers: identityHeaders,
+    });
+    expect(started.statusCode).toBe(201);
+    expect(started.json().status).toBe('IN_RECEIVING');
+    const invalidWeights = await server.inject({
+      method: 'PUT', url: `/v1/loads/${scheduledLoad.json().id}/receipt`, headers: identityHeaders,
+      payload: {
+        receivedAt: '2026-11-10T12:00:00-03:00', grossWeightKg: '15000.000', tareWeightKg: '16000.000',
+        weighingMode: 'SCALE', scaleTicketNumber: 'TB-TESTE-1', contingencyReason: null,
+        moisturePct: '13.2', impurityPct: '1.1', damagedPct: '2.3', qualityDecision: 'ACCEPTED', notes: null,
+      },
+    });
+    expect(invalidWeights.statusCode).toBe(422);
+    expect(invalidWeights.json()).toMatchObject({ code: 'GROSS_WEIGHT_MUST_EXCEED_TARE' });
+    const receipt = await server.inject({
+      method: 'PUT', url: `/v1/loads/${scheduledLoad.json().id}/receipt`, headers: identityHeaders,
+      payload: {
+        receivedAt: '2026-11-10T12:00:00-03:00', grossWeightKg: '48000.000', tareWeightKg: '15000.000',
+        weighingMode: 'SCALE', scaleTicketNumber: 'TB-TESTE-1', contingencyReason: null,
+        moisturePct: '13.2', impurityPct: '1.1', damagedPct: '2.3', qualityDecision: 'ACCEPTED', notes: 'Teste de aceite.',
+      },
+    });
+    expect(receipt.statusCode, receipt.body).toBe(200);
+    expect(receipt.json()).toMatchObject({ status: 'RECEIVED', receipt: { version: 1, netWeightKg: '33000.000' } });
+    const corrected = await server.inject({
+      method: 'PUT', url: `/v1/loads/${scheduledLoad.json().id}/receipt`, headers: identityHeaders,
+      payload: {
+        receivedAt: '2026-11-10T12:00:00-03:00', grossWeightKg: '48010.000', tareWeightKg: '15000.000',
+        weighingMode: 'MANUAL_CONTINGENCY', scaleTicketNumber: null,
+        contingencyReason: 'Correção manual após indisponibilidade da integração da balança.',
+        moisturePct: '14.8', impurityPct: '2.4', damagedPct: '5.1', qualityDecision: 'REVIEW_REQUIRED', notes: null,
+      },
+    });
+    expect(corrected.statusCode, corrected.body).toBe(200);
+    expect(corrected.json()).toMatchObject({ status: 'IN_RECEIVING', receipt: { version: 2, netWeightKg: '33010.000' } });
+    const detail = await server.inject({
+      method: 'GET', url: `/v1/loads/${scheduledLoad.json().id}`, headers: identityHeaders,
+    });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json()).toMatchObject({ status: 'IN_RECEIVING', receipt: { version: 2, qualityDecision: 'REVIEW_REQUIRED' } });
+    expect(detail.json().receiptHistory).toHaveLength(2);
     const contracts = await server.inject({ method: 'GET', url: '/v1/contracts', headers: identityHeaders });
     expect(contracts.statusCode).toBe(200);
     expect(contracts.json()).toMatchObject({
@@ -216,7 +260,7 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
 
     const processor = app.get(OutboxProcessor);
     const firstPass = await processor.processTenant(identityHeaders['x-tenant-id']);
-    expect(firstPass).toMatchObject({ claimed: 13, published: 13, failed: 0, recovered: 0, pending: 0 });
+    expect(firstPass).toMatchObject({ claimed: 16, published: 16, failed: 0, recovered: 0, pending: 0 });
     expect(await processor.processTenant(identityHeaders['x-tenant-id'])).toMatchObject({
       claimed: 0, published: 0, failed: 0, recovered: 0, pending: 0,
     });
@@ -239,7 +283,7 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
         WHERE tenant_id=$1 AND aggregate_id=$2 AND event_type='offer.cancelled'`,
       [identityHeaders['x-tenant-id'], cancellableOffer.offerId],
     );
-    expect(activity.rows[0]?.count).toBe('13');
+    expect(activity.rows[0]?.count).toBe('16');
     expect(projection.rows[0]?.projected_margin_per_sc).toBe('3.000000');
     expect(projection.rows[0]?.obligations).toHaveLength(2);
     expect(cancellationAudit.rows[0]?.payload).toEqual({

@@ -22,6 +22,6 @@ pnpm demo:reset -- \
   --confirm RESET_DEMO_TENANT
 ```
 
-O reset substitui somente contraparte, política de margem, ofertas, cenários, aprovações, contratos, obrigações, cargas e projeções do tenant demonstrativo. A versão atual do conjunto é `1`.
+O reset substitui somente contraparte, política de margem, ofertas, cenários, aprovações, contratos, obrigações, cargas, recebimentos e projeções do tenant demonstrativo. A versão atual do conjunto é `2`.
 
 Não use `supabase db reset --linked` para restaurar a demonstração: esse comando apagaria o banco remoto inteiro.

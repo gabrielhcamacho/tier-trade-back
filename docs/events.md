@@ -9,6 +9,10 @@
 | `offer.repriced` | offer | rascunho recalculado em novo cenário | auditoria, projeções |
 | `offer.cancelled` | offer | oferta cancelada antes do contrato | auditoria, projeções |
 | `margin_policy.changed` | margin_policy | tenant publica nova versão | auditoria, projeções |
+| `load.scheduled` | load | carga reservada no contrato | agenda operacional |
+| `load.receiving_started` | load | operador inicia o recebimento | pátio, fila de trabalho |
+| `load.receipt_recorded` | load | primeira pesagem e classificação registradas | estoque futuro, saldo contratual |
+| `load.receipt_corrected` | load | nova versão substitui o registro vigente | estoque futuro, reconciliação |
 
 Todos carregam `id`, `tenant_id`, tipo, agregado, payload mínimo e instante. A outbox é gravada na mesma transação da mudança. Publicação é pelo menos uma vez; consumidores deduplicam por `id`.
 

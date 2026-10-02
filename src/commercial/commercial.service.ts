@@ -285,6 +285,7 @@ export class CommercialService {
                 s.purchase_price_per_sc,s.projected_margin_per_sc,
                 COALESCE(load_totals.load_count,0)::integer AS load_count,
                 COALESCE(load_totals.scheduled_weight_kg,0)::numeric(20,3) AS scheduled_weight_kg,
+                COALESCE(load_totals.received_weight_kg,0)::numeric(20,3) AS received_weight_kg,
                 GREATEST(o.quantity_sc * 60 - COALESCE(load_totals.scheduled_weight_kg,0),0)::numeric(20,3)
                   AS available_weight_kg,
                 COALESCE(obligation_totals.pending_obligations,0)::integer AS pending_obligations
@@ -296,8 +297,12 @@ export class CommercialService {
              ON (s.tenant_id,s.offer_id)=(o.tenant_id,o.id) AND s.is_current=true
            LEFT JOIN LATERAL (
              SELECT count(*)::integer AS load_count,
-                    COALESCE(sum(l.expected_weight_kg),0)::numeric(20,3) AS scheduled_weight_kg
+                    COALESCE(sum(l.expected_weight_kg),0)::numeric(20,3) AS scheduled_weight_kg,
+                    COALESCE(sum(r.net_weight_kg) FILTER (WHERE l.status='RECEIVED'),0)::numeric(20,3)
+                      AS received_weight_kg
                FROM app.loads l
+               LEFT JOIN app.load_receipts r
+                 ON (r.tenant_id,r.load_id)=(l.tenant_id,l.id) AND r.is_current=true
               WHERE l.tenant_id=c.tenant_id AND l.contract_id=c.id AND l.status <> 'CANCELLED'
            ) load_totals ON true
            LEFT JOIN LATERAL (

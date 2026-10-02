@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 
-export const DEMO_SEED_VERSION = 1;
+export const DEMO_SEED_VERSION = 2;
 
 export type ResetDemoTenantInput = {
   tenantId: string;
@@ -15,6 +15,7 @@ export type ResetDemoTenantResult = {
   offers: number;
   contracts: number;
   loads: number;
+  receipts: number;
 };
 
 const ids = {
@@ -57,6 +58,10 @@ const ids = {
     'd7000000-0000-4000-8000-000000000002',
     'd7000000-0000-4000-8000-000000000003',
   ],
+  receipts: [
+    'd8000000-0000-4000-8000-000000000001',
+    'd8000000-0000-4000-8000-000000000002',
+  ],
 } as const;
 
 export async function resetDemoTenant(
@@ -93,7 +98,7 @@ export async function resetDemoTenant(
         WHERE tenant_id=$1`,
       [input.tenantId],
     );
-    await clearOperationalData(client, input.tenantId);
+    await clearOperationalData(client, input.tenantId, input.actorId);
     await seedOperationalData(client, input);
 
     await client.query(
@@ -113,6 +118,7 @@ export async function resetDemoTenant(
       offers: ids.offers.length,
       contracts: ids.contracts.length,
       loads: ids.loads.length,
+      receipts: ids.receipts.length,
     };
   } catch (error) {
     await client.query('ROLLBACK');
@@ -122,7 +128,8 @@ export async function resetDemoTenant(
   }
 }
 
-async function clearOperationalData(client: PoolClient, tenantId: string): Promise<void> {
+async function clearOperationalData(client: PoolClient, tenantId: string, actorId: string): Promise<void> {
+  await client.query('SELECT app.delete_demo_load_receipts($1,$2)', [tenantId, actorId]);
   for (const table of [
     'contract_summary_read_model',
     'commercial_activity_read_model',
@@ -219,10 +226,23 @@ async function seedOperationalData(client: PoolClient, input: ResetDemoTenantInp
   await client.query(
     `INSERT INTO app.loads
       (tenant_id,id,contract_id,scheduled_at,expected_weight_kg,vehicle_plate,carrier_name,destination_code,status,created_by,created_at,updated_at) VALUES
-      ($1,$2,$5,'2026-10-15T11:00:00Z',48000.000,'ABC1D23','Transportadora Horizonte — Dado fictício','ARMAZEM_GO_01','SCHEDULED',$7,'2026-09-22T13:00:00Z','2026-09-22T13:00:00Z'),
-      ($1,$3,$5,'2026-10-17T15:30:00Z',51000.000,'DEF4G56','Logística do Cerrado — Dado fictício','ARMAZEM_GO_01','SCHEDULED',$7,'2026-09-23T14:00:00Z','2026-09-23T14:00:00Z'),
+      ($1,$2,$5,'2026-10-15T11:00:00Z',48000.000,'ABC1D23','Transportadora Horizonte — Dado fictício','ARMAZEM_GO_01','RECEIVED',$7,'2026-09-22T13:00:00Z','2026-10-01T12:15:00Z'),
+      ($1,$3,$5,'2026-10-17T15:30:00Z',51000.000,'DEF4G56','Logística do Cerrado — Dado fictício','ARMAZEM_GO_01','IN_RECEIVING',$7,'2026-09-23T14:00:00Z','2026-10-01T14:05:00Z'),
       ($1,$4,$6,'2026-10-22T12:00:00Z',45000.000,'GHI7J89','Transportadora Horizonte — Dado fictício','TERMINAL_SP_02','SCHEDULED',$7,'2026-09-27T12:00:00Z','2026-09-27T12:00:00Z')`,
     [tenantId, ...ids.loads, ...ids.contracts, actorId],
+  );
+  await client.query(
+    `INSERT INTO app.load_receipts
+      (tenant_id,id,load_id,version,is_current,received_at,gross_weight_kg,tare_weight_kg,
+       weighing_mode,scale_ticket_number,contingency_reason,moisture_pct,impurity_pct,
+       damaged_pct,quality_decision,notes,created_by,created_at) VALUES
+      ($1,$2,$4,1,true,'2026-10-01T12:05:00Z',48260.000,15340.000,
+       'SCALE','TB-2026-001',NULL,13.2000,1.1000,2.3000,'ACCEPTED',
+       'Recebimento fictício dentro do padrão informado pelo operador.',$6,'2026-10-01T12:15:00Z'),
+      ($1,$3,$5,1,true,'2026-10-01T14:00:00Z',50780.000,14920.000,
+       'MANUAL_CONTINGENCY',NULL,'Balança integrada indisponível durante o recebimento.',14.8000,2.4000,5.1000,
+       'REVIEW_REQUIRED','Dado fictício aguardando decisão humana de qualidade.',$6,'2026-10-01T14:05:00Z')`,
+    [tenantId, ...ids.receipts, ids.loads[0], ids.loads[1], actorId],
   );
 
   await seedReadModelsAndAudit(client, input);
@@ -232,12 +252,17 @@ async function seedReadModelsAndAudit(client: PoolClient, input: ResetDemoTenant
   const contractEvents = [randomUUID(), randomUUID()];
   const resetEvent = randomUUID();
   const events = [
-    { id: contractEvents[0]!, type: 'contract.activated', aggregate: 'contract', aggregateId: ids.contracts[0], occurredAt: '2026-09-12T15:10:00Z' },
-    { id: contractEvents[1]!, type: 'contract.activated', aggregate: 'contract', aggregateId: ids.contracts[1], occurredAt: '2026-09-16T16:10:00Z' },
-    { id: resetEvent, type: 'demo.seed_reset', aggregate: 'tenant', aggregateId: input.tenantId, occurredAt: new Date().toISOString() },
+    { id: contractEvents[0]!, type: 'contract.activated', aggregate: 'contract', aggregateId: ids.contracts[0], occurredAt: '2026-09-12T15:10:00Z', payload: {} },
+    { id: contractEvents[1]!, type: 'contract.activated', aggregate: 'contract', aggregateId: ids.contracts[1], occurredAt: '2026-09-16T16:10:00Z', payload: {} },
+    { id: randomUUID(), type: 'load.scheduled', aggregate: 'load', aggregateId: ids.loads[0], occurredAt: '2026-09-22T13:00:00Z', payload: { expectedWeightKg: '48000.000' } },
+    { id: randomUUID(), type: 'load.scheduled', aggregate: 'load', aggregateId: ids.loads[1], occurredAt: '2026-09-23T14:00:00Z', payload: { expectedWeightKg: '51000.000' } },
+    { id: randomUUID(), type: 'load.scheduled', aggregate: 'load', aggregateId: ids.loads[2], occurredAt: '2026-09-27T12:00:00Z', payload: { expectedWeightKg: '45000.000' } },
+    { id: randomUUID(), type: 'load.receipt_recorded', aggregate: 'load', aggregateId: ids.loads[0], occurredAt: '2026-10-01T12:15:00Z', payload: { version: 1, netWeightKg: '32920.000', qualityDecision: 'ACCEPTED' } },
+    { id: randomUUID(), type: 'load.receipt_recorded', aggregate: 'load', aggregateId: ids.loads[1], occurredAt: '2026-10-01T14:05:00Z', payload: { version: 1, netWeightKg: '35860.000', qualityDecision: 'REVIEW_REQUIRED' } },
+    { id: resetEvent, type: 'demo.seed_reset', aggregate: 'tenant', aggregateId: input.tenantId, occurredAt: new Date().toISOString(), payload: {} },
   ];
   for (const event of events) {
-    const payload = JSON.stringify({ demoSeedVersion: DEMO_SEED_VERSION, seeded: true });
+    const payload = JSON.stringify({ demoSeedVersion: DEMO_SEED_VERSION, seeded: true, ...event.payload });
     await client.query(
       `INSERT INTO app.audit_events
         (tenant_id,id,actor_id,event_type,aggregate_type,aggregate_id,payload,occurred_at)

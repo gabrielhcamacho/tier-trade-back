@@ -3,7 +3,7 @@ import Decimal from 'decimal.js';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { DatabasePlatformPort } from '../database/database.js';
-import type { ScheduleLoadInput } from './operations.schemas.js';
+import type { RecordLoadReceiptInput, ScheduleLoadInput } from './operations.schemas.js';
 
 interface ContractForScheduling {
   status: string;
@@ -26,6 +26,24 @@ interface LoadRow {
   status: string;
   created_at: Date;
   timezone?: string;
+}
+
+interface ReceiptRow {
+  id: string;
+  version: number;
+  received_at: Date;
+  gross_weight_kg: string;
+  tare_weight_kg: string;
+  net_weight_kg: string;
+  weighing_mode: string;
+  scale_ticket_number: string | null;
+  contingency_reason: string | null;
+  moisture_pct: string;
+  impurity_pct: string;
+  damaged_pct: string;
+  quality_decision: string;
+  notes: string | null;
+  created_at: Date;
 }
 
 @Injectable()
@@ -106,12 +124,15 @@ export class OperationsService {
         [tenantId, contractId],
       );
       if (!contract.rows[0]) throw new NotFoundException({ code: 'CONTRACT_NOT_FOUND' });
-      const result = await client.query<LoadRow>(
-        `SELECT id,contract_id,scheduled_at,expected_weight_kg,vehicle_plate,
-                carrier_name,destination_code,status,created_at
-           FROM app.loads
-          WHERE tenant_id=$1 AND contract_id=$2
-          ORDER BY scheduled_at,id`,
+      const result = await client.query<LoadRow & { received_weight_kg: string }>(
+        `SELECT l.id,l.contract_id,l.scheduled_at,l.expected_weight_kg,l.vehicle_plate,
+                l.carrier_name,l.destination_code,l.status,l.created_at,
+                COALESCE(r.net_weight_kg,0)::text AS received_weight_kg
+           FROM app.loads l
+           LEFT JOIN app.load_receipts r
+             ON (r.tenant_id,r.load_id)=(l.tenant_id,l.id) AND r.is_current=true
+          WHERE l.tenant_id=$1 AND l.contract_id=$2
+          ORDER BY l.scheduled_at,l.id`,
         [tenantId, contractId],
       );
       const items = result.rows.map((row) => this.presentLoad(row, contract.rows[0]!.timezone));
@@ -119,12 +140,15 @@ export class OperationsService {
         .filter((row) => row.status !== 'CANCELLED')
         .reduce((total, row) => total.plus(row.expected_weight_kg), new Decimal(0));
       const contractWeight = new Decimal(contract.rows[0].quantity_sc).mul(60);
+      const receivedWeight = result.rows
+        .filter((row) => row.status === 'RECEIVED')
+        .reduce((total, row) => total.plus(row.received_weight_kg), new Decimal(0));
       return {
         items,
         summary: {
           count: items.length,
           scheduledWeightKg: scheduledWeight.toFixed(3),
-          receivedWeightKg: '0.000',
+          receivedWeightKg: receivedWeight.toFixed(3),
           availableWeightKg: contractWeight.minus(scheduledWeight).toFixed(3),
         },
       };
@@ -142,7 +166,139 @@ export class OperationsService {
         [tenantId, loadId],
       );
       if (!result.rows[0]) throw new NotFoundException({ code: 'LOAD_NOT_FOUND' });
-      return this.presentLoad(result.rows[0]);
+      const receipts = await client.query<ReceiptRow>(
+        `SELECT id,version,received_at,gross_weight_kg,tare_weight_kg,net_weight_kg,
+                weighing_mode,scale_ticket_number,contingency_reason,moisture_pct,
+                impurity_pct,damaged_pct,quality_decision,notes,created_at
+           FROM app.load_receipts
+          WHERE tenant_id=$1 AND load_id=$2
+          ORDER BY version DESC`,
+        [tenantId, loadId],
+      );
+      const receiptHistory = receipts.rows.map((row) => this.presentReceipt(row));
+      return {
+        ...this.presentLoad(result.rows[0]),
+        receipt: receiptHistory[0] ?? null,
+        receiptHistory,
+        events: [
+          ...receiptHistory.map((receipt) => ({
+            type: receipt.version === 1 ? 'load.receipt_recorded' : 'load.receipt_corrected',
+            payload: {
+              version: receipt.version,
+              netWeightKg: receipt.netWeightKg,
+              qualityDecision: receipt.qualityDecision,
+            },
+            occurredAt: receipt.createdAt,
+          })),
+          {
+            type: 'load.scheduled',
+            payload: { expectedWeightKg: result.rows[0]!.expected_weight_kg },
+            occurredAt: result.rows[0]!.created_at.toISOString(),
+          },
+        ],
+      };
+    });
+  }
+
+  startReceiving(tenantId: string, actorId: string, loadId: string) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'OPERATIONS_EDIT');
+      const load = await client.query<LoadRow>(
+        `SELECT l.id,l.contract_id,l.scheduled_at,l.expected_weight_kg,l.vehicle_plate,
+                l.carrier_name,l.destination_code,l.status,l.created_at,t.timezone
+           FROM app.loads l JOIN app.tenants t ON t.id=l.tenant_id
+          WHERE l.tenant_id=$1 AND l.id=$2 FOR UPDATE OF l`,
+        [tenantId, loadId],
+      );
+      if (!load.rows[0]) throw new NotFoundException({ code: 'LOAD_NOT_FOUND' });
+      if (load.rows[0].status !== 'SCHEDULED') {
+        throw new ConflictException({ code: 'LOAD_NOT_SCHEDULED', status: load.rows[0].status });
+      }
+      await client.query(
+        `UPDATE app.loads SET status='IN_RECEIVING',updated_at=now()
+          WHERE tenant_id=$1 AND id=$2`,
+        [tenantId, loadId],
+      );
+      await this.record(client, tenantId, actorId, 'load.receiving_started', loadId, {
+        previousStatus: 'SCHEDULED', status: 'IN_RECEIVING',
+      });
+      return { ...this.presentLoad(load.rows[0]), status: 'IN_RECEIVING' };
+    });
+  }
+
+  recordReceipt(tenantId: string, actorId: string, loadId: string, input: RecordLoadReceiptInput) {
+    const gross = new Decimal(input.grossWeightKg);
+    const tare = new Decimal(input.tareWeightKg);
+    if (!gross.greaterThan(tare)) {
+      throw new UnprocessableEntityException({ code: 'GROSS_WEIGHT_MUST_EXCEED_TARE' });
+    }
+    const net = gross.minus(tare);
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'OPERATIONS_EDIT');
+      const load = await client.query<LoadRow>(
+        `SELECT l.id,l.contract_id,l.scheduled_at,l.expected_weight_kg,l.vehicle_plate,
+                l.carrier_name,l.destination_code,l.status,l.created_at,t.timezone
+           FROM app.loads l JOIN app.tenants t ON t.id=l.tenant_id
+          WHERE l.tenant_id=$1 AND l.id=$2 FOR UPDATE OF l`,
+        [tenantId, loadId],
+      );
+      if (!load.rows[0]) throw new NotFoundException({ code: 'LOAD_NOT_FOUND' });
+      if (!['IN_RECEIVING', 'RECEIVED'].includes(load.rows[0].status)) {
+        throw new ConflictException({ code: 'LOAD_NOT_IN_RECEIVING', status: load.rows[0].status });
+      }
+
+      const previous = await client.query<ReceiptRow>(
+        `SELECT id,version,received_at,gross_weight_kg,tare_weight_kg,net_weight_kg,
+                weighing_mode,scale_ticket_number,contingency_reason,moisture_pct,
+                impurity_pct,damaged_pct,quality_decision,notes,created_at
+           FROM app.load_receipts
+          WHERE tenant_id=$1 AND load_id=$2 AND is_current=true
+          FOR UPDATE`,
+        [tenantId, loadId],
+      );
+      const version = (previous.rows[0]?.version ?? 0) + 1;
+      if (previous.rows[0]) {
+        await client.query(
+          `UPDATE app.load_receipts SET is_current=false
+            WHERE tenant_id=$1 AND load_id=$2 AND is_current=true`,
+          [tenantId, loadId],
+        );
+      }
+      const receipt = await client.query<ReceiptRow>(
+        `INSERT INTO app.load_receipts
+          (tenant_id,id,load_id,version,received_at,gross_weight_kg,tare_weight_kg,
+           weighing_mode,scale_ticket_number,contingency_reason,moisture_pct,impurity_pct,
+           damaged_pct,quality_decision,notes,created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+         RETURNING id,version,received_at,gross_weight_kg,tare_weight_kg,net_weight_kg,
+                   weighing_mode,scale_ticket_number,contingency_reason,moisture_pct,
+                   impurity_pct,damaged_pct,quality_decision,notes,created_at`,
+        [tenantId, randomUUID(), loadId, version, input.receivedAt, input.grossWeightKg,
+          input.tareWeightKg, input.weighingMode, input.scaleTicketNumber,
+          input.weighingMode === 'MANUAL_CONTINGENCY' ? input.contingencyReason : null,
+          input.moisturePct, input.impurityPct, input.damagedPct, input.qualityDecision,
+          input.notes, actorId],
+      );
+      const nextStatus = input.qualityDecision === 'ACCEPTED' ? 'RECEIVED' : 'IN_RECEIVING';
+      await client.query(
+        `UPDATE app.loads SET status=$3,updated_at=now() WHERE tenant_id=$1 AND id=$2`,
+        [tenantId, loadId, nextStatus],
+      );
+      const eventType = previous.rows[0] ? 'load.receipt_corrected' : 'load.receipt_recorded';
+      await this.record(client, tenantId, actorId, eventType, loadId, {
+        version,
+        previousVersion: previous.rows[0]?.version ?? null,
+        previousStatus: load.rows[0].status,
+        status: nextStatus,
+        netWeightKg: net.toFixed(3),
+        weighingMode: input.weighingMode,
+        qualityDecision: input.qualityDecision,
+      });
+      return {
+        ...this.presentLoad(load.rows[0]),
+        status: nextStatus,
+        receipt: this.presentReceipt(receipt.rows[0]!),
+      };
     });
   }
 
@@ -174,6 +330,26 @@ export class OperationsService {
       carrierName: row.carrier_name,
       destinationCode: row.destination_code,
       status: row.status,
+      createdAt: row.created_at.toISOString(),
+    };
+  }
+
+  private presentReceipt(row: ReceiptRow) {
+    return {
+      id: row.id,
+      version: row.version,
+      receivedAt: row.received_at.toISOString(),
+      grossWeightKg: row.gross_weight_kg,
+      tareWeightKg: row.tare_weight_kg,
+      netWeightKg: row.net_weight_kg,
+      weighingMode: row.weighing_mode,
+      scaleTicketNumber: row.scale_ticket_number,
+      contingencyReason: row.contingency_reason,
+      moisturePct: row.moisture_pct,
+      impurityPct: row.impurity_pct,
+      damagedPct: row.damaged_pct,
+      qualityDecision: row.quality_decision,
+      notes: row.notes,
       createdAt: row.created_at.toISOString(),
     };
   }
