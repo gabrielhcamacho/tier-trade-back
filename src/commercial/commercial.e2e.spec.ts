@@ -31,6 +31,7 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     await setup.query(await readFile(new URL('../../supabase/migrations/20261001194949_optimize_tenant_rls.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261001224302_control_plane_access.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261001224527_index_control_invitation_inviter.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261002030013_operations_load_scheduling.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../scripts/seed-local.sql', import.meta.url), 'utf8'));
     await setup.end();
 
@@ -117,6 +118,45 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     expect(summary.json()).toMatchObject({ status: 'ACTIVE' });
     expect(summary.json().obligations).toHaveLength(2);
 
+    const scheduledLoad = await server.inject({
+      method: 'POST', url: `/v1/contracts/${contract.contractId}/loads`, headers: identityHeaders,
+      payload: {
+        scheduledLocal: '2026-11-10T08:30',
+        expectedWeightKg: '48000.000',
+        vehiclePlate: 'RBC-7H55',
+        carrierName: 'Rodogrãos',
+        destinationCode: 'ARM-RV01',
+      },
+    });
+    expect(scheduledLoad.statusCode, scheduledLoad.body).toBe(201);
+    expect(scheduledLoad.json()).toMatchObject({
+      contractId: contract.contractId,
+      expectedWeightKg: '48000.000',
+      vehiclePlate: 'RBC7H55',
+      status: 'SCHEDULED',
+      contractBalanceKg: '552000.000',
+    });
+    const agenda = await server.inject({
+      method: 'GET', url: `/v1/contracts/${contract.contractId}/loads`, headers: identityHeaders,
+    });
+    expect(agenda.statusCode).toBe(200);
+    expect(agenda.json()).toMatchObject({
+      summary: { count: 1, scheduledWeightKg: '48000.000', availableWeightKg: '552000.000' },
+    });
+    expect(agenda.json().items).toHaveLength(1);
+    const overflow = await server.inject({
+      method: 'POST', url: `/v1/contracts/${contract.contractId}/loads`, headers: identityHeaders,
+      payload: {
+        scheduledLocal: '2026-11-11T08:30',
+        expectedWeightKg: '552000.001',
+        vehiclePlate: 'QAB-2J41',
+        carrierName: 'Transmil',
+        destinationCode: 'ARM-RV01',
+      },
+    });
+    expect(overflow.statusCode).toBe(422);
+    expect(overflow.json()).toMatchObject({ code: 'LOAD_EXCEEDS_CONTRACT_BALANCE' });
+
     const cancellable = await server.inject({
       method: 'POST', url: '/v1/offers', headers: identityHeaders, payload: offerInput,
     });
@@ -161,7 +201,7 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
 
     const processor = app.get(OutboxProcessor);
     const firstPass = await processor.processTenant(identityHeaders['x-tenant-id']);
-    expect(firstPass).toMatchObject({ claimed: 12, published: 12, failed: 0, recovered: 0, pending: 0 });
+    expect(firstPass).toMatchObject({ claimed: 13, published: 13, failed: 0, recovered: 0, pending: 0 });
     expect(await processor.processTenant(identityHeaders['x-tenant-id'])).toMatchObject({
       claimed: 0, published: 0, failed: 0, recovered: 0, pending: 0,
     });
@@ -184,7 +224,7 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
         WHERE tenant_id=$1 AND aggregate_id=$2 AND event_type='offer.cancelled'`,
       [identityHeaders['x-tenant-id'], cancellableOffer.offerId],
     );
-    expect(activity.rows[0]?.count).toBe('12');
+    expect(activity.rows[0]?.count).toBe('13');
     expect(projection.rows[0]?.projected_margin_per_sc).toBe('3.000000');
     expect(projection.rows[0]?.obligations).toHaveLength(2);
     expect(cancellationAudit.rows[0]?.payload).toEqual({

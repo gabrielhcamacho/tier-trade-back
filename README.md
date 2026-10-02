@@ -1,6 +1,6 @@
 # Tier Trade API
 
-Backend modular da plataforma Tier Trade. A primeira fatia cobre oferta de compra de milho, cálculo determinístico de margem, aprovação e ativação do contrato.
+Backend modular da plataforma Tier Trade. A primeira fatia cobre oferta de compra de milho, cálculo determinístico de margem, aprovação e ativação do contrato. A segunda fatia começa pela programação de cargas vinculadas ao contrato ativo.
 
 ## Desenvolvimento local
 
@@ -25,6 +25,8 @@ Antes de iniciar um processo compartilhado ou de produção, execute `TIER_TRADE
 
 `POST /v1/access/invitations` exige `ACCESS_MANAGE`, envia o convite para definição de senha e cria a membership com capabilities explícitas. `GET /v1/session` retorna o tenant resolvido e as capabilities do usuário autenticado.
 
+`POST /v1/contracts/:contractId/loads` exige `OPERATIONS_EDIT` e programa uma carga no fuso do tenant. `GET /v1/contracts/:contractId/loads` retorna a agenda e o saldo de peso; `GET /v1/loads/:loadId` retorna o detalhe. A programação rejeita contratos inativos, datas fora da janela e peso acima do saldo.
+
 Sondas operacionais: `GET /health/live` verifica o processo e `GET /health/ready` verifica o banco.
 
-Leia `docs/first-slice.md` antes de ampliar o domínio.
+Leia `docs/first-slice.md` e `docs/second-slice.md` antes de ampliar o domínio.

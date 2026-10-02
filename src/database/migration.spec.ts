@@ -13,6 +13,7 @@ describe('commercial foundation migration', () => {
       '20261001194949_optimize_tenant_rls.sql',
       '20261001224302_control_plane_access.sql',
       '20261001224527_index_control_invitation_inviter.sql',
+      '20261002030013_operations_load_scheduling.sql',
     ]) {
       const migration = await readFile(new URL(`../../supabase/migrations/${migrationName}`, import.meta.url), 'utf8');
       await db.exec(migration);

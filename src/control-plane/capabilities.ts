@@ -4,6 +4,7 @@ export const CAPABILITIES = [
   'COMMERCIAL_CANCEL',
   'MARGIN_POLICY_MANAGE',
   'ACCESS_MANAGE',
+  'OPERATIONS_EDIT',
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];
