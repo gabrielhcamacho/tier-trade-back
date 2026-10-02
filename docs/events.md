@@ -11,8 +11,8 @@
 | `margin_policy.changed` | margin_policy | tenant publica nova versão | auditoria, projeções |
 | `load.scheduled` | load | carga reservada no contrato | agenda operacional |
 | `load.receiving_started` | load | operador inicia o recebimento | pátio, fila de trabalho |
-| `load.receipt_recorded` | load | primeira pesagem e classificação registradas | estoque futuro, saldo contratual |
-| `load.receipt_corrected` | load | nova versão substitui o registro vigente | estoque futuro, reconciliação |
+| `load.receipt_recorded` | load | primeira pesagem e classificação registradas | estoque, saldo contratual |
+| `load.receipt_corrected` | load | nova versão substitui o registro vigente | estoque, reconciliação |
 
 Todos carregam `id`, `tenant_id`, tipo, agregado, payload mínimo e instante. A outbox é gravada na mesma transação da mudança. Publicação é pelo menos uma vez; consumidores deduplicam por `id`.
 
@@ -23,6 +23,7 @@ Todos carregam `id`, `tenant_id`, tipo, agregado, payload mínimo e instante. A 
 - falhas usam backoff exponencial limitado a cinco minutos;
 - `commercial_activity_read_model` registra a linha do tempo de todos os eventos;
 - `contract_summary_read_model` é criada idempotentemente por `contract.activated`;
+- o módulo de estoque registra, na mesma transação do recebimento, entrada, correção ou estorno compensatório; o saldo é sempre a soma do livro de movimentos;
 - `published_at` indica entrega aos consumidores internos atuais.
 - o worker expõe saúde em `/health/live` e `/health/ready` e métricas em `/metrics` na porta operacional própria;
 - falha, retentativa e recuperação geram logs JSON sem payload de negócio.

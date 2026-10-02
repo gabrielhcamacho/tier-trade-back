@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 
-export const DEMO_SEED_VERSION = 2;
+export const DEMO_SEED_VERSION = 3;
 
 export type ResetDemoTenantInput = {
   tenantId: string;
@@ -16,6 +16,8 @@ export type ResetDemoTenantResult = {
   contracts: number;
   loads: number;
   receipts: number;
+  inventoryLots: number;
+  inventoryMovements: number;
 };
 
 const ids = {
@@ -62,6 +64,11 @@ const ids = {
     'd8000000-0000-4000-8000-000000000001',
     'd8000000-0000-4000-8000-000000000002',
   ],
+  inventory: {
+    location: 'd9000000-0000-4000-8000-000000000001',
+    lot: 'da000000-0000-4000-8000-000000000001',
+    movement: 'db000000-0000-4000-8000-000000000001',
+  },
 } as const;
 
 export async function resetDemoTenant(
@@ -119,6 +126,8 @@ export async function resetDemoTenant(
       contracts: ids.contracts.length,
       loads: ids.loads.length,
       receipts: ids.receipts.length,
+      inventoryLots: 1,
+      inventoryMovements: 1,
     };
   } catch (error) {
     await client.query('ROLLBACK');
@@ -129,6 +138,7 @@ export async function resetDemoTenant(
 }
 
 async function clearOperationalData(client: PoolClient, tenantId: string, actorId: string): Promise<void> {
+  await client.query('SELECT app.delete_demo_inventory($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_load_receipts($1,$2)', [tenantId, actorId]);
   for (const table of [
     'contract_summary_read_model',
@@ -243,6 +253,30 @@ async function seedOperationalData(client: PoolClient, input: ResetDemoTenantInp
        'MANUAL_CONTINGENCY',NULL,'Balança integrada indisponível durante o recebimento.',14.8000,2.4000,5.1000,
        'REVIEW_REQUIRED','Dado fictício aguardando decisão humana de qualidade.',$6,'2026-10-01T14:05:00Z')`,
     [tenantId, ...ids.receipts, ids.loads[0], ids.loads[1], actorId],
+  );
+  await client.query(
+    `INSERT INTO app.inventory_locations
+      (tenant_id,id,code,name,status,created_by,created_at)
+     VALUES ($1,$2,'ARMAZEM_GO_01','Armazém Goiás 01','ACTIVE',$3,'2026-09-01T12:00:00Z')`,
+    [tenantId, ids.inventory.location, actorId],
+  );
+  await client.query(
+    `INSERT INTO app.inventory_lots
+      (tenant_id,id,lot_code,source_load_id,contract_id,location_id,commodity,status,
+       ownership_status,risk_status,custody_status,created_by,created_at,updated_at)
+     VALUES ($1,$2,'LT-GO-26-0001',$3,$4,$5,'MILHO','AVAILABLE',
+       'PENDING_DEFINITION','PENDING_DEFINITION','IN_STORAGE',$6,
+       '2026-10-01T12:15:00Z','2026-10-01T12:15:00Z')`,
+    [tenantId, ids.inventory.lot, ids.loads[0], ids.contracts[0],
+      ids.inventory.location, actorId],
+  );
+  await client.query(
+    `INSERT INTO app.inventory_movements
+      (tenant_id,id,lot_id,source_load_id,source_receipt_id,movement_type,
+       quantity_delta_kg,occurred_at,created_by,created_at)
+     VALUES ($1,$2,$3,$4,$5,'RECEIPT',32920.000,'2026-10-01T12:05:00Z',$6,'2026-10-01T12:15:00Z')`,
+    [tenantId, ids.inventory.movement, ids.inventory.lot, ids.loads[0],
+      ids.receipts[0], actorId],
   );
 
   await seedReadModelsAndAudit(client, input);

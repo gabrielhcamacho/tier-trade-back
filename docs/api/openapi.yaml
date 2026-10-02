@@ -151,6 +151,11 @@ paths:
         '200': { description: Registro criado ou corrigido em nova versão }
         '409': { description: Recebimento ainda não iniciado }
         '422': { description: Pesos ou evidência de contingência inválidos }
+  /v1/inventory:
+    get:
+      summary: Retorna posição por lote e o livro de movimentos do tenant
+      responses:
+        '200': { description: Saldos físicos, lotes e movimentos calculados no backend }
   /v1/settings/margin-policy/MILHO:
     get:
       summary: Retorna a política ativa de margem do milho

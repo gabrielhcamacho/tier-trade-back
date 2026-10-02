@@ -3,6 +3,7 @@ import Decimal from 'decimal.js';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { DatabasePlatformPort } from '../database/database.js';
+import { InventoryReceiptPort } from '../inventory/inventory.port.js';
 import type { RecordLoadReceiptInput, ScheduleLoadInput } from './operations.schemas.js';
 
 interface ContractForScheduling {
@@ -48,7 +49,10 @@ interface ReceiptRow {
 
 @Injectable()
 export class OperationsService {
-  constructor(@Inject(DatabasePlatformPort) private readonly db: DatabasePlatformPort) {}
+  constructor(
+    @Inject(DatabasePlatformPort) private readonly db: DatabasePlatformPort,
+    @Inject(InventoryReceiptPort) private readonly inventory: InventoryReceiptPort,
+  ) {}
 
   async scheduleLoad(tenantId: string, actorId: string, contractId: string, input: ScheduleLoadInput) {
     const expectedWeight = new Decimal(input.expectedWeightKg);
@@ -264,6 +268,7 @@ export class OperationsService {
           [tenantId, loadId],
         );
       }
+      const receiptId = randomUUID();
       const receipt = await client.query<ReceiptRow>(
         `INSERT INTO app.load_receipts
           (tenant_id,id,load_id,version,received_at,gross_weight_kg,tare_weight_kg,
@@ -273,7 +278,7 @@ export class OperationsService {
          RETURNING id,version,received_at,gross_weight_kg,tare_weight_kg,net_weight_kg,
                    weighing_mode,scale_ticket_number,contingency_reason,moisture_pct,
                    impurity_pct,damaged_pct,quality_decision,notes,created_at`,
-        [tenantId, randomUUID(), loadId, version, input.receivedAt, input.grossWeightKg,
+        [tenantId, receiptId, loadId, version, input.receivedAt, input.grossWeightKg,
           input.tareWeightKg, input.weighingMode, input.scaleTicketNumber,
           input.weighingMode === 'MANUAL_CONTINGENCY' ? input.contingencyReason : null,
           input.moisturePct, input.impurityPct, input.damagedPct, input.qualityDecision,
@@ -284,6 +289,19 @@ export class OperationsService {
         `UPDATE app.loads SET status=$3,updated_at=now() WHERE tenant_id=$1 AND id=$2`,
         [tenantId, loadId, nextStatus],
       );
+      await this.inventory.applyReceipt(client, {
+        tenantId,
+        actorId,
+        loadId,
+        contractId: load.rows[0].contract_id,
+        destinationCode: load.rows[0].destination_code,
+        receiptId,
+        receivedAt: new Date(input.receivedAt),
+        previousAcceptedWeightKg: previous.rows[0]?.quality_decision === 'ACCEPTED'
+          ? previous.rows[0].net_weight_kg
+          : '0',
+        nextAcceptedWeightKg: input.qualityDecision === 'ACCEPTED' ? net.toFixed(3) : '0',
+      });
       const eventType = previous.rows[0] ? 'load.receipt_corrected' : 'load.receipt_recorded';
       await this.record(client, tenantId, actorId, eventType, loadId, {
         version,

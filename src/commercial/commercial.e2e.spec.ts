@@ -35,6 +35,7 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     await setup.query(await readFile(new URL('../../supabase/migrations/20261002042905_demo_tenant_contract_portfolio.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261002162513_operations_receiving_quality.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261002163915_grant_demo_reset_load_receipts.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261002174124_inventory_receipt_ledger.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../scripts/seed-local.sql', import.meta.url), 'utf8'));
     await setup.end();
 
@@ -172,6 +173,20 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     });
     expect(receipt.statusCode, receipt.body).toBe(200);
     expect(receipt.json()).toMatchObject({ status: 'RECEIVED', receipt: { version: 1, netWeightKg: '33000.000' } });
+    const inventoryAfterReceipt = await server.inject({
+      method: 'GET', url: '/v1/inventory', headers: identityHeaders,
+    });
+    expect(inventoryAfterReceipt.statusCode, inventoryAfterReceipt.body).toBe(200);
+    expect(inventoryAfterReceipt.json()).toMatchObject({
+      summary: {
+        physicalWeightKg: '33000.000',
+        availableWeightKg: '33000.000',
+        lotCount: 1,
+        pendingOwnershipCount: 1,
+      },
+      lots: [{ sourceLoadId: scheduledLoad.json().id, status: 'AVAILABLE', quantityKg: '33000.000' }],
+      movements: [{ type: 'RECEIPT', quantityDeltaKg: '33000.000' }],
+    });
     const corrected = await server.inject({
       method: 'PUT', url: `/v1/loads/${scheduledLoad.json().id}/receipt`, headers: identityHeaders,
       payload: {
@@ -183,6 +198,18 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     });
     expect(corrected.statusCode, corrected.body).toBe(200);
     expect(corrected.json()).toMatchObject({ status: 'IN_RECEIVING', receipt: { version: 2, netWeightKg: '33010.000' } });
+    const inventoryAfterReview = await server.inject({
+      method: 'GET', url: '/v1/inventory', headers: identityHeaders,
+    });
+    expect(inventoryAfterReview.statusCode, inventoryAfterReview.body).toBe(200);
+    expect(inventoryAfterReview.json()).toMatchObject({
+      summary: { physicalWeightKg: '0.000', availableWeightKg: '0.000', lotCount: 1 },
+      lots: [{ sourceLoadId: scheduledLoad.json().id, status: 'BLOCKED_REVIEW', quantityKg: '0.000' }],
+    });
+    expect(inventoryAfterReview.json().movements).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'RECEIPT', quantityDeltaKg: '33000.000' }),
+      expect.objectContaining({ type: 'RECEIPT_REVERSAL', quantityDeltaKg: '-33000.000' }),
+    ]));
     const detail = await server.inject({
       method: 'GET', url: `/v1/loads/${scheduledLoad.json().id}`, headers: identityHeaders,
     });

@@ -19,6 +19,7 @@ describe('commercial foundation migration', () => {
       '20261002042905_demo_tenant_contract_portfolio.sql',
       '20261002162513_operations_receiving_quality.sql',
       '20261002163915_grant_demo_reset_load_receipts.sql',
+      '20261002174124_inventory_receipt_ledger.sql',
     ]) {
       const migration = await readFile(new URL(`../../supabase/migrations/${migrationName}`, import.meta.url), 'utf8');
       await db.exec(migration);
@@ -67,6 +68,10 @@ describe('commercial foundation migration', () => {
     expect(visibleLoads.rows).toEqual([{ count: 0 }]);
     const visibleReceipts = await db.query<{ count: number }>('SELECT count(*)::int AS count FROM app.load_receipts');
     expect(visibleReceipts.rows).toEqual([{ count: 0 }]);
+    const visibleLots = await db.query<{ count: number }>('SELECT count(*)::int AS count FROM app.inventory_lots');
+    expect(visibleLots.rows).toEqual([{ count: 0 }]);
+    const visibleMovements = await db.query<{ count: number }>('SELECT count(*)::int AS count FROM app.inventory_movements');
+    expect(visibleMovements.rows).toEqual([{ count: 0 }]);
     await db.exec('RESET ROLE');
     await db.close();
   });
