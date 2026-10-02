@@ -12,7 +12,7 @@
 - transporte externo definitivo da outbox e tecnologia de fila; o dispatcher interno em PostgreSQL já está definido;
 - ferramenta de observabilidade e retenção dos sinais;
 - integração com Mountier Agro;
-- regras fiscais, contábeis, liquidação, qualidade realizada e execução física;
+- regras fiscais, contábeis, arredondamento monetário por tenant e descontos de qualidade;
 - nome comercial definitivo do produto.
 
 ## Resolvidas
@@ -25,3 +25,4 @@
 - o projeto `Tier trade geral` em `sa-east-1` é o ambiente compartilhado do piloto;
 - SSL do banco está obrigatório e as sete migrations locais estão alinhadas ao remoto;
 - piloto e produção usarão projetos Supabase separados.
+- expedições de venda geram previsão financeira; títulos e baixas são registros separados, auditados e reversíveis.

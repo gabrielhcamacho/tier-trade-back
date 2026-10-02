@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 
-export const DEMO_SEED_VERSION = 4;
+export const DEMO_SEED_VERSION = 5;
 
 export type ResetDemoTenantInput = {
   tenantId: string;
@@ -21,6 +21,9 @@ export type ResetDemoTenantResult = {
   salesContracts: number;
   allocations: number;
   dispatches: number;
+  financialEvents: number;
+  financialTitles: number;
+  financialSettlements: number;
 };
 
 const ids = {
@@ -79,6 +82,11 @@ const ids = {
     dispatch: 'de000000-0000-4000-8000-000000000001',
     movement: 'df000000-0000-4000-8000-000000000001',
   },
+  finance: {
+    event: 'e0000000-0000-4000-8000-000000000001',
+    title: 'e1000000-0000-4000-8000-000000000001',
+    settlement: 'e2000000-0000-4000-8000-000000000001',
+  },
 } as const;
 
 export async function resetDemoTenant(
@@ -105,7 +113,8 @@ export async function resetDemoTenant(
     );
     if (membership.rowCount !== 1) throw new Error('ACTIVE_DEMO_ACTOR_MEMBERSHIP_NOT_FOUND');
     const capabilities = membership.rows[0]?.capabilities ?? [];
-    if (!capabilities.includes('COMMERCIAL_EDIT') || !capabilities.includes('OPERATIONS_EDIT')) {
+    if (!capabilities.includes('COMMERCIAL_EDIT') || !capabilities.includes('OPERATIONS_EDIT')
+      || !capabilities.includes('FINANCE_EDIT')) {
       throw new Error('DEMO_ACTOR_CAPABILITIES_INCOMPLETE');
     }
 
@@ -141,6 +150,9 @@ export async function resetDemoTenant(
       salesContracts: 1,
       allocations: 1,
       dispatches: 1,
+      financialEvents: 1,
+      financialTitles: 1,
+      financialSettlements: 1,
     };
   } catch (error) {
     await client.query('ROLLBACK');
@@ -151,6 +163,7 @@ export async function resetDemoTenant(
 }
 
 async function clearOperationalData(client: PoolClient, tenantId: string, actorId: string): Promise<void> {
+  await client.query('SELECT app.delete_demo_finance($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_sales_fulfillment($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_inventory($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_load_receipts($1,$2)', [tenantId, actorId]);
@@ -296,9 +309,9 @@ async function seedOperationalData(client: PoolClient, input: ResetDemoTenantInp
   await client.query(
     `INSERT INTO app.sales_contracts
       (tenant_id,id,counterparty_id,reference,commodity,quantity_kg,sale_price_per_kg,
-       destination_code,delivery_start,delivery_end,required_documents,status,created_by,created_at,updated_at)
+       destination_code,delivery_start,delivery_end,required_documents,payment_term_days,status,created_by,created_at,updated_at)
      VALUES ($1,$2,$3,'CV-2026-0042','MILHO',20000.000,1.420000,'IND_SP_01',
-       '2026-10-01','2026-10-31',ARRAY['Nota fiscal','Romaneio de pesagem'],'ACTIVE',$4,
+       '2026-10-01','2026-10-31',ARRAY['Nota fiscal','Romaneio de pesagem'],7,'ACTIVE',$4,
        '2026-09-28T12:00:00Z','2026-09-28T12:00:00Z')`,
     [tenantId, ids.fulfillment.salesContract, ids.counterparties[4], actorId],
   );
@@ -322,6 +335,35 @@ async function seedOperationalData(client: PoolClient, input: ResetDemoTenantInp
     [tenantId, ids.fulfillment.movement, ids.inventory.lot, ids.fulfillment.allocation,
       ids.fulfillment.dispatch, actorId],
   );
+  await client.query(
+    `INSERT INTO app.financial_events
+      (tenant_id,id,event_type,source_type,source_id,sales_contract_id,counterparty_id,direction,
+       quantity_kg,unit_price,raw_amount,calculated_amount,calculation_status,expected_on,
+       formula_code,formula_version,calculation_memory,created_by,created_at)
+     VALUES ($1,$2,'SALE_DISPATCH_RECEIVABLE','INVENTORY_DISPATCH',$3,$4,$5,'INFLOW',
+       8000.000,1.420000,11360.000000000,11360.00,'READY','2026-10-08',
+       'SALE_DISPATCH_GROSS',1,$6::jsonb,$7,'2026-10-01T16:05:00Z')`,
+    [tenantId, ids.finance.event, ids.fulfillment.dispatch, ids.fulfillment.salesContract,
+      ids.counterparties[4], JSON.stringify({
+        quantityKg: '8000.000', unitPricePerKg: '1.420000',
+        operation: 'quantityKg × unitPricePerKg', rawAmount: '11360.000000000',
+        currency: 'BRL', rounding: 'NOT_REQUIRED_EXACT_CENTS',
+      }), actorId],
+  );
+  await client.query(
+    `INSERT INTO app.financial_titles
+      (tenant_id,id,financial_event_id,title_number,document_reference,due_date,amount,status,issued_by,issued_at)
+     VALUES ($1,$2,$3,'TR-2026-0001','NF-DEMO-0001','2026-10-08',11360.00,
+       'PARTIALLY_SETTLED',$4,'2026-10-01T16:20:00Z')`,
+    [tenantId, ids.finance.title, ids.finance.event, actorId],
+  );
+  await client.query(
+    `INSERT INTO app.financial_settlements
+      (tenant_id,id,title_id,amount,received_at,bank_reference,notes,created_by,created_at)
+     VALUES ($1,$2,$3,4000.00,'2026-10-02T13:00:00Z','PIX-DEMO-0001',
+       'Recebimento parcial fictício para demonstração.',$4,'2026-10-02T13:05:00Z')`,
+    [tenantId, ids.finance.settlement, ids.finance.title, actorId],
+  );
 
   await seedReadModelsAndAudit(client, input);
 }
@@ -337,6 +379,9 @@ async function seedReadModelsAndAudit(client: PoolClient, input: ResetDemoTenant
     { id: randomUUID(), type: 'load.scheduled', aggregate: 'load', aggregateId: ids.loads[2], occurredAt: '2026-09-27T12:00:00Z', payload: { expectedWeightKg: '45000.000' } },
     { id: randomUUID(), type: 'load.receipt_recorded', aggregate: 'load', aggregateId: ids.loads[0], occurredAt: '2026-10-01T12:15:00Z', payload: { version: 1, netWeightKg: '32920.000', qualityDecision: 'ACCEPTED' } },
     { id: randomUUID(), type: 'load.receipt_recorded', aggregate: 'load', aggregateId: ids.loads[1], occurredAt: '2026-10-01T14:05:00Z', payload: { version: 1, netWeightKg: '35860.000', qualityDecision: 'REVIEW_REQUIRED' } },
+    { id: randomUUID(), type: 'finance.forecast_projected', aggregate: 'financial_event', aggregateId: ids.finance.event, occurredAt: '2026-10-01T16:05:00Z', payload: { sourceId: ids.fulfillment.dispatch, calculatedAmount: '11360.00' } },
+    { id: randomUUID(), type: 'finance.title_issued', aggregate: 'financial_title', aggregateId: ids.finance.title, occurredAt: '2026-10-01T16:20:00Z', payload: { financialEventId: ids.finance.event, amount: '11360.00' } },
+    { id: randomUUID(), type: 'finance.receipt_recorded', aggregate: 'financial_settlement', aggregateId: ids.finance.settlement, occurredAt: '2026-10-02T13:05:00Z', payload: { titleId: ids.finance.title, amount: '4000.00' } },
     { id: resetEvent, type: 'demo.seed_reset', aggregate: 'tenant', aggregateId: input.tenantId, occurredAt: new Date().toISOString(), payload: {} },
   ];
   for (const event of events) {

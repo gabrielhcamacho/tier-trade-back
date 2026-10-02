@@ -5,6 +5,7 @@ export const CAPABILITIES = [
   'MARGIN_POLICY_MANAGE',
   'ACCESS_MANAGE',
   'OPERATIONS_EDIT',
+  'FINANCE_EDIT',
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];

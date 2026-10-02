@@ -17,7 +17,11 @@
 | `sales_contract.updated` | sales_contract | condições ainda executáveis são alteradas | carteira de venda, auditoria |
 | `inventory.allocated` | inventory_allocation | lote é reservado para contrato de venda | disponibilidade, programação |
 | `inventory.allocation_released` | inventory_allocation | reserva sem expedição é liberada | disponibilidade |
-| `inventory.dispatched` | inventory_dispatch | saída parcial ou total é confirmada | estoque, saldo contratual, financeiro futuro |
+| `inventory.dispatched` | inventory_dispatch | saída parcial ou total é confirmada | estoque, saldo contratual |
+| `finance.forecast_projected` | financial_event | expedição de venda gera entrada prevista | títulos, posição financeira, caixa |
+| `finance.title_issued` | financial_title | previsão pronta é vinculada a documento e vencimento | contas a receber |
+| `finance.receipt_recorded` | financial_settlement | baixa parcial ou total é confirmada | caixa, conciliação |
+| `finance.receipt_reversed` | financial_settlement | baixa é estornada com motivo | caixa, conciliação, auditoria |
 
 Todos carregam `id`, `tenant_id`, tipo, agregado, payload mínimo e instante. A outbox é gravada na mesma transação da mudança. Publicação é pelo menos uma vez; consumidores deduplicam por `id`.
 
@@ -30,6 +34,7 @@ Todos carregam `id`, `tenant_id`, tipo, agregado, payload mínimo e instante. A 
 - `contract_summary_read_model` é criada idempotentemente por `contract.activated`;
 - o módulo de estoque registra, na mesma transação do recebimento, entrada, correção ou estorno compensatório; o saldo é sempre a soma do livro de movimentos;
 - alocações alteram somente disponibilidade; expedições criam movimento `DISPATCH` negativo e atualizam o saldo executado da venda na mesma transação;
+- a mesma transação da expedição cria o evento financeiro canônico; título e baixa continuam fatos posteriores e separados;
 - `published_at` indica entrega aos consumidores internos atuais.
 - o worker expõe saúde em `/health/live` e `/health/ready` e métricas em `/metrics` na porta operacional própria;
 - falha, retentativa e recuperação geram logs JSON sem payload de negócio.

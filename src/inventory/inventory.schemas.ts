@@ -16,6 +16,7 @@ export const salesContractSchema = z.object({
   deliveryStart: date,
   deliveryEnd: date,
   requiredDocuments: z.array(z.string().trim().min(1).max(80)).max(20).default([]),
+  paymentTermDays: z.number().int().min(0).max(730).nullable().default(null),
 }).refine((value) => value.deliveryEnd >= value.deliveryStart, {
   path: ['deliveryEnd'], message: 'Delivery end must not precede delivery start.',
 });

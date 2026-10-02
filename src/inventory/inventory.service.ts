@@ -3,6 +3,7 @@ import Decimal from 'decimal.js';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { DatabasePlatformPort } from '../database/database.js';
+import { FinancialProjectionPort } from '../finance/finance.port.js';
 import { InventoryReceiptPort, type ApplyReceiptToInventoryInput } from './inventory.port.js';
 import type { AllocationInput, DispatchInput, SalesContractInput } from './inventory.schemas.js';
 
@@ -44,7 +45,10 @@ interface MovementRow {
 
 @Injectable()
 export class InventoryService extends InventoryReceiptPort {
-  constructor(@Inject(DatabasePlatformPort) private readonly db: DatabasePlatformPort) {
+  constructor(
+    @Inject(DatabasePlatformPort) private readonly db: DatabasePlatformPort,
+    @Inject(FinancialProjectionPort) private readonly finance: FinancialProjectionPort,
+  ) {
     super();
   }
 
@@ -119,7 +123,7 @@ export class InventoryService extends InventoryReceiptPort {
       const salesContracts = await client.query(
         `SELECT sc.id,sc.counterparty_id,sc.reference,sc.commodity,sc.quantity_kg::text,sc.sale_price_per_kg::text,
                 sc.destination_code,sc.delivery_start::text,sc.delivery_end::text,
-                sc.required_documents,sc.status,cp.legal_name AS counterparty_name,
+                sc.required_documents,sc.payment_term_days,sc.status,cp.legal_name AS counterparty_name,
                 COALESCE(a.allocated_kg,0)::text AS allocated_kg,
                 COALESCE(a.dispatched_kg,0)::text AS dispatched_kg
            FROM app.sales_contracts sc
@@ -230,11 +234,12 @@ export class InventoryService extends InventoryReceiptPort {
         await client.query(
           `INSERT INTO app.sales_contracts
             (tenant_id,id,counterparty_id,reference,commodity,quantity_kg,sale_price_per_kg,
-             destination_code,delivery_start,delivery_end,required_documents,created_by)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+             destination_code,delivery_start,delivery_end,required_documents,payment_term_days,created_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
           [tenantId, id, input.counterpartyId, input.reference, input.commodity,
             new Decimal(input.quantityKg).toFixed(3), new Decimal(input.salePricePerKg).toFixed(6),
-            input.destinationCode, input.deliveryStart, input.deliveryEnd, input.requiredDocuments, actorId],
+            input.destinationCode, input.deliveryStart, input.deliveryEnd, input.requiredDocuments,
+            input.paymentTermDays, actorId],
         );
       } catch (error) {
         if (isUniqueViolation(error)) throw new ConflictException({ code: 'SALES_CONTRACT_REFERENCE_EXISTS' });
@@ -268,11 +273,12 @@ export class InventoryService extends InventoryReceiptPort {
         await client.query(
           `UPDATE app.sales_contracts SET counterparty_id=$3,reference=$4,commodity=$5,
                   quantity_kg=$6,sale_price_per_kg=$7,destination_code=$8,delivery_start=$9,
-                  delivery_end=$10,required_documents=$11,updated_at=now()
+                  delivery_end=$10,required_documents=$11,payment_term_days=$12,updated_at=now()
             WHERE tenant_id=$1 AND id=$2`,
           [tenantId, contractId, input.counterpartyId, input.reference, input.commodity,
             new Decimal(input.quantityKg).toFixed(3), new Decimal(input.salePricePerKg).toFixed(6),
-            input.destinationCode, input.deliveryStart, input.deliveryEnd, input.requiredDocuments],
+            input.destinationCode, input.deliveryStart, input.deliveryEnd, input.requiredDocuments,
+            input.paymentTermDays],
         );
       } catch (error) {
         if (isUniqueViolation(error)) throw new ConflictException({ code: 'SALES_CONTRACT_REFERENCE_EXISTS' });
@@ -398,8 +404,14 @@ export class InventoryService extends InventoryReceiptPort {
         await client.query(`UPDATE app.inventory_allocations SET status='FULFILLED'
           WHERE tenant_id=$1 AND id=$2`, [tenantId, input.allocationId]);
       }
+      const projection = await this.finance.projectSalesDispatch(client, {
+        tenantId, actorId, dispatchId: id,
+      });
       await this.record(client, tenantId, actorId, 'inventory.dispatched', 'inventory_dispatch', id, input);
-      return { id, allocationId: input.allocationId, quantityKg: quantity.toFixed(3), status: 'CONFIRMED' };
+      return {
+        id, allocationId: input.allocationId, quantityKg: quantity.toFixed(3), status: 'CONFIRMED',
+        ...projection,
+      };
     });
   }
 

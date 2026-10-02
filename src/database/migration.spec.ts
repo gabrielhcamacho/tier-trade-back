@@ -21,6 +21,7 @@ describe('commercial foundation migration', () => {
       '20261002163915_grant_demo_reset_load_receipts.sql',
       '20261002174124_inventory_receipt_ledger.sql',
       '20261002211618_sales_fulfillment_slice.sql',
+      '20261002220831_financial_receivables_slice.sql',
     ]) {
       const migration = await readFile(new URL(`../../supabase/migrations/${migrationName}`, import.meta.url), 'utf8');
       await db.exec(migration);
