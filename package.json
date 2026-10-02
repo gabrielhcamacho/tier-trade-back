@@ -13,6 +13,7 @@
     "start:worker:production": "TIER_TRADE_PROCESS=worker node dist/config/check-environment.js && node dist/outbox/worker.js",
     "dev": "tsx watch src/main.ts",
     "environment:check": "tsx src/config/check-environment.ts",
+    "demo:reset": "tsx scripts/reset-demo-tenant.ts",
     "worker:outbox": "tsx src/outbox/worker.ts",
     "test": "vitest run",
     "test:watch": "vitest"
