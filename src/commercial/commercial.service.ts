@@ -273,7 +273,8 @@ export class CommercialService {
     return this.db.transaction(tenantId, async (client) => {
       await this.assertMember(client, tenantId, actorId);
       const result = await client.query(
-        `SELECT c.id, c.status, o.commodity, o.unit, o.quantity_sc, o.delivery_start, o.delivery_end,
+        `SELECT c.id, c.status, o.commodity, o.unit, o.quantity_sc,
+                o.delivery_start::text AS delivery_start, o.delivery_end::text AS delivery_end,
                 s.purchase_price_per_sc, s.sale_reference_per_sc, s.total_costs_per_sc,
                 s.projected_margin_per_sc, s.policy_version,
                 COALESCE(jsonb_agg(jsonb_build_object('code', ob.code, 'status', ob.status))
