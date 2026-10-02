@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 
-export const DEMO_SEED_VERSION = 3;
+export const DEMO_SEED_VERSION = 4;
 
 export type ResetDemoTenantInput = {
   tenantId: string;
@@ -18,6 +18,9 @@ export type ResetDemoTenantResult = {
   receipts: number;
   inventoryLots: number;
   inventoryMovements: number;
+  salesContracts: number;
+  allocations: number;
+  dispatches: number;
 };
 
 const ids = {
@@ -27,6 +30,7 @@ const ids = {
     'd1000000-0000-4000-8000-000000000002',
     'd1000000-0000-4000-8000-000000000003',
     'd1000000-0000-4000-8000-000000000004',
+    'd1000000-0000-4000-8000-000000000005',
   ],
   offers: [
     'd2000000-0000-4000-8000-000000000001',
@@ -68,6 +72,12 @@ const ids = {
     location: 'd9000000-0000-4000-8000-000000000001',
     lot: 'da000000-0000-4000-8000-000000000001',
     movement: 'db000000-0000-4000-8000-000000000001',
+  },
+  fulfillment: {
+    salesContract: 'dc000000-0000-4000-8000-000000000001',
+    allocation: 'dd000000-0000-4000-8000-000000000001',
+    dispatch: 'de000000-0000-4000-8000-000000000001',
+    movement: 'df000000-0000-4000-8000-000000000001',
   },
 } as const;
 
@@ -127,7 +137,10 @@ export async function resetDemoTenant(
       loads: ids.loads.length,
       receipts: ids.receipts.length,
       inventoryLots: 1,
-      inventoryMovements: 1,
+      inventoryMovements: 2,
+      salesContracts: 1,
+      allocations: 1,
+      dispatches: 1,
     };
   } catch (error) {
     await client.query('ROLLBACK');
@@ -138,6 +151,7 @@ export async function resetDemoTenant(
 }
 
 async function clearOperationalData(client: PoolClient, tenantId: string, actorId: string): Promise<void> {
+  await client.query('SELECT app.delete_demo_sales_fulfillment($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_inventory($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_load_receipts($1,$2)', [tenantId, actorId]);
   for (const table of [
@@ -163,7 +177,8 @@ async function seedOperationalData(client: PoolClient, input: ResetDemoTenantInp
       ($1,$2,'Fazenda Boa Esperança — Dado fictício','99000000000101','2026-09-08T13:00:00Z'),
       ($1,$3,'Cooperativa Vale do Cerrado — Dado fictício','99000000000102','2026-09-10T14:30:00Z'),
       ($1,$4,'Agropecuária Santa Luzia — Dado fictício','99000000000103','2026-09-15T12:00:00Z'),
-      ($1,$5,'Cerealista Rio Verde — Dado fictício','99000000000104','2026-09-18T15:45:00Z')`,
+      ($1,$5,'Cerealista Rio Verde — Dado fictício','99000000000104','2026-09-18T15:45:00Z'),
+      ($1,$6,'Indústria Alimentícia Horizonte — Dado fictício','99000000000105','2026-09-20T13:20:00Z')`,
     [tenantId, ...ids.counterparties],
   );
   await client.query(
@@ -277,6 +292,35 @@ async function seedOperationalData(client: PoolClient, input: ResetDemoTenantInp
      VALUES ($1,$2,$3,$4,$5,'RECEIPT',32920.000,'2026-10-01T12:05:00Z',$6,'2026-10-01T12:15:00Z')`,
     [tenantId, ids.inventory.movement, ids.inventory.lot, ids.loads[0],
       ids.receipts[0], actorId],
+  );
+  await client.query(
+    `INSERT INTO app.sales_contracts
+      (tenant_id,id,counterparty_id,reference,commodity,quantity_kg,sale_price_per_kg,
+       destination_code,delivery_start,delivery_end,required_documents,status,created_by,created_at,updated_at)
+     VALUES ($1,$2,$3,'CV-2026-0042','MILHO',20000.000,1.420000,'IND_SP_01',
+       '2026-10-01','2026-10-31',ARRAY['Nota fiscal','Romaneio de pesagem'],'ACTIVE',$4,
+       '2026-09-28T12:00:00Z','2026-09-28T12:00:00Z')`,
+    [tenantId, ids.fulfillment.salesContract, ids.counterparties[4], actorId],
+  );
+  await client.query(
+    `INSERT INTO app.inventory_allocations
+      (tenant_id,id,sales_contract_id,lot_id,quantity_kg,status,created_by,created_at)
+     VALUES ($1,$2,$3,$4,20000.000,'ACTIVE',$5,'2026-10-01T13:00:00Z')`,
+    [tenantId, ids.fulfillment.allocation, ids.fulfillment.salesContract, ids.inventory.lot, actorId],
+  );
+  await client.query(
+    `INSERT INTO app.inventory_dispatches
+      (tenant_id,id,allocation_id,quantity_kg,dispatched_at,vehicle_plate,document_reference,notes,created_by,created_at)
+     VALUES ($1,$2,$3,8000.000,'2026-10-01T16:00:00Z','JKL1M23','NF-DEMO-0001',
+       'Expedição parcial fictícia para demonstração.',$4,'2026-10-01T16:05:00Z')`,
+    [tenantId, ids.fulfillment.dispatch, ids.fulfillment.allocation, actorId],
+  );
+  await client.query(
+    `INSERT INTO app.inventory_movements
+      (tenant_id,id,lot_id,allocation_id,dispatch_id,movement_type,quantity_delta_kg,occurred_at,created_by,created_at)
+     VALUES ($1,$2,$3,$4,$5,'DISPATCH',-8000.000,'2026-10-01T16:00:00Z',$6,'2026-10-01T16:05:00Z')`,
+    [tenantId, ids.fulfillment.movement, ids.inventory.lot, ids.fulfillment.allocation,
+      ids.fulfillment.dispatch, actorId],
   );
 
   await seedReadModelsAndAudit(client, input);

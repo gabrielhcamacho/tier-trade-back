@@ -1,9 +1,10 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import Decimal from 'decimal.js';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { DatabasePlatformPort } from '../database/database.js';
 import { InventoryReceiptPort, type ApplyReceiptToInventoryInput } from './inventory.port.js';
+import type { AllocationInput, DispatchInput, SalesContractInput } from './inventory.schemas.js';
 
 interface LotPositionRow {
   id: string;
@@ -18,6 +19,8 @@ interface LotPositionRow {
   risk_status: string;
   custody_status: string;
   quantity_kg: string;
+  committed_kg: string;
+  available_kg: string;
   moisture_pct: string;
   impurity_pct: string;
   damaged_pct: string;
@@ -29,8 +32,10 @@ interface MovementRow {
   id: string;
   lot_id: string;
   lot_code: string;
-  source_load_id: string;
-  source_receipt_id: string;
+  source_load_id: string | null;
+  source_receipt_id: string | null;
+  allocation_id: string | null;
+  dispatch_id: string | null;
   movement_type: string;
   quantity_delta_kg: string;
   occurred_at: Date;
@@ -59,6 +64,8 @@ export class InventoryService extends InventoryReceiptPort {
                 loc.code AS location_code,loc.name AS location_name,lot.commodity,lot.status,
                 lot.ownership_status,lot.risk_status,lot.custody_status,
                 COALESCE(sum(m.quantity_delta_kg),0)::text AS quantity_kg,
+                COALESCE(allocation_totals.committed_kg,0)::text AS committed_kg,
+                GREATEST(COALESCE(sum(m.quantity_delta_kg),0)-COALESCE(allocation_totals.committed_kg,0),0)::text AS available_kg,
                 r.moisture_pct::text,r.impurity_pct::text,r.damaged_pct::text,
                 l.vehicle_plate,lot.created_at
            FROM app.inventory_lots lot
@@ -69,16 +76,27 @@ export class InventoryService extends InventoryReceiptPort {
              ON (m.tenant_id,m.lot_id)=(lot.tenant_id,lot.id)
            LEFT JOIN app.load_receipts r
              ON (r.tenant_id,r.load_id)=(lot.tenant_id,lot.source_load_id) AND r.is_current=true
+           LEFT JOIN LATERAL (
+             SELECT COALESCE(sum(a.quantity_kg-COALESCE(d.dispatched_kg,0)),0)::numeric(20,3) AS committed_kg
+               FROM app.inventory_allocations a
+               LEFT JOIN LATERAL (
+                 SELECT COALESCE(sum(quantity_kg),0)::numeric(20,3) AS dispatched_kg
+                   FROM app.inventory_dispatches
+                  WHERE tenant_id=a.tenant_id AND allocation_id=a.id
+               ) d ON true
+              WHERE a.tenant_id=lot.tenant_id AND a.lot_id=lot.id AND a.status='ACTIVE'
+           ) allocation_totals ON true
           WHERE lot.tenant_id=$1
           GROUP BY lot.id,lot.lot_code,lot.source_load_id,lot.contract_id,loc.code,loc.name,
                    lot.commodity,lot.status,lot.ownership_status,lot.risk_status,
                    lot.custody_status,r.moisture_pct,r.impurity_pct,r.damaged_pct,
-                   l.vehicle_plate,lot.created_at
+                   l.vehicle_plate,lot.created_at,allocation_totals.committed_kg
           ORDER BY loc.code,lot.lot_code`,
         [tenantId],
       );
       const movements = await client.query<MovementRow>(
         `SELECT m.id,m.lot_id,lot.lot_code,m.source_load_id,m.source_receipt_id,
+                m.allocation_id,m.dispatch_id,
                 m.movement_type,m.quantity_delta_kg::text,m.occurred_at,m.created_at
            FROM app.inventory_movements m
            JOIN app.inventory_lots lot ON (lot.tenant_id,lot.id)=(m.tenant_id,m.lot_id)
@@ -93,8 +111,53 @@ export class InventoryService extends InventoryReceiptPort {
       );
       const available = lots.rows
         .filter((row) => row.status === 'AVAILABLE')
+        .reduce((total, row) => total.plus(row.available_kg), new Decimal(0));
+      const committed = lots.rows.reduce(
+        (total, row) => total.plus(row.committed_kg), new Decimal(0));
+      const blocked = lots.rows.filter((row) => row.status !== 'AVAILABLE')
         .reduce((total, row) => total.plus(row.quantity_kg), new Decimal(0));
-      const blocked = physical.minus(available);
+      const salesContracts = await client.query(
+        `SELECT sc.id,sc.counterparty_id,sc.reference,sc.commodity,sc.quantity_kg::text,sc.sale_price_per_kg::text,
+                sc.destination_code,sc.delivery_start::text,sc.delivery_end::text,
+                sc.required_documents,sc.status,cp.legal_name AS counterparty_name,
+                COALESCE(a.allocated_kg,0)::text AS allocated_kg,
+                COALESCE(a.dispatched_kg,0)::text AS dispatched_kg
+           FROM app.sales_contracts sc
+           JOIN app.counterparties cp ON (cp.tenant_id,cp.id)=(sc.tenant_id,sc.counterparty_id)
+           LEFT JOIN LATERAL (
+             SELECT COALESCE(sum(x.quantity_kg) FILTER (WHERE x.status<>'RELEASED'),0)::numeric(20,3) AS allocated_kg,
+                    COALESCE(sum(x.dispatched_kg),0)::numeric(20,3) AS dispatched_kg
+               FROM (
+                 SELECT ia.quantity_kg,ia.status,COALESCE(sum(id.quantity_kg),0)::numeric(20,3) AS dispatched_kg
+                   FROM app.inventory_allocations ia
+                   LEFT JOIN app.inventory_dispatches id
+                     ON (id.tenant_id,id.allocation_id)=(ia.tenant_id,ia.id)
+                  WHERE ia.tenant_id=sc.tenant_id AND ia.sales_contract_id=sc.id
+                  GROUP BY ia.id,ia.quantity_kg,ia.status
+               ) x
+           ) a ON true
+          WHERE sc.tenant_id=$1 ORDER BY sc.created_at DESC,sc.id DESC`, [tenantId]);
+      const allocations = await client.query(
+        `SELECT a.id,a.sales_contract_id,a.lot_id,a.quantity_kg::text,a.status,a.created_at,
+                sc.reference AS contract_reference,lot.lot_code,
+                COALESCE(sum(d.quantity_kg),0)::text AS dispatched_kg
+           FROM app.inventory_allocations a
+           JOIN app.sales_contracts sc ON (sc.tenant_id,sc.id)=(a.tenant_id,a.sales_contract_id)
+           JOIN app.inventory_lots lot ON (lot.tenant_id,lot.id)=(a.tenant_id,a.lot_id)
+           LEFT JOIN app.inventory_dispatches d ON (d.tenant_id,d.allocation_id)=(a.tenant_id,a.id)
+          WHERE a.tenant_id=$1
+          GROUP BY a.id,a.sales_contract_id,a.lot_id,a.quantity_kg,a.status,a.created_at,sc.reference,lot.lot_code
+          ORDER BY a.created_at DESC,a.id DESC`, [tenantId]);
+      const dispatches = await client.query(
+        `SELECT d.id,d.allocation_id,d.quantity_kg::text,d.dispatched_at,d.vehicle_plate,
+                d.document_reference,d.notes,d.created_at,sc.reference AS contract_reference,lot.lot_code
+           FROM app.inventory_dispatches d
+           JOIN app.inventory_allocations a ON (a.tenant_id,a.id)=(d.tenant_id,d.allocation_id)
+           JOIN app.sales_contracts sc ON (sc.tenant_id,sc.id)=(a.tenant_id,a.sales_contract_id)
+           JOIN app.inventory_lots lot ON (lot.tenant_id,lot.id)=(a.tenant_id,a.lot_id)
+          WHERE d.tenant_id=$1 ORDER BY d.created_at DESC,d.id DESC`, [tenantId]);
+      const counterparties = await client.query(
+        `SELECT id,legal_name FROM app.counterparties WHERE tenant_id=$1 ORDER BY legal_name,id`, [tenantId]);
       return {
         tenant: {
           legalName: tenant.rows[0]!.legal_name,
@@ -105,6 +168,7 @@ export class InventoryService extends InventoryReceiptPort {
           physicalWeightKg: physical.toFixed(3),
           availableWeightKg: available.toFixed(3),
           blockedWeightKg: blocked.toFixed(3),
+          committedWeightKg: committed.toFixed(3),
           lotCount: lots.rowCount,
           pendingOwnershipCount: lots.rows.filter(
             (row) => row.ownership_status === 'PENDING_DEFINITION',
@@ -122,6 +186,8 @@ export class InventoryService extends InventoryReceiptPort {
           riskStatus: row.risk_status,
           custodyStatus: row.custody_status,
           quantityKg: row.quantity_kg,
+          committedKg: row.committed_kg,
+          availableKg: row.status === 'AVAILABLE' ? row.available_kg : '0.000',
           quality: {
             moisturePct: row.moisture_pct,
             impurityPct: row.impurity_pct,
@@ -136,12 +202,204 @@ export class InventoryService extends InventoryReceiptPort {
           lotCode: row.lot_code,
           sourceLoadId: row.source_load_id,
           sourceReceiptId: row.source_receipt_id,
+          allocationId: row.allocation_id,
+          dispatchId: row.dispatch_id,
           type: row.movement_type,
           quantityDeltaKg: row.quantity_delta_kg,
           occurredAt: row.occurred_at.toISOString(),
           recordedAt: row.created_at.toISOString(),
         })),
+        salesContracts: salesContracts.rows,
+        allocations: allocations.rows,
+        dispatches: dispatches.rows,
+        counterparties: counterparties.rows,
       };
+    });
+  }
+
+  createSalesContract(tenantId: string, actorId: string, input: SalesContractInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'COMMERCIAL_EDIT');
+      const counterparty = await client.query(
+        'SELECT 1 FROM app.counterparties WHERE tenant_id=$1 AND id=$2',
+        [tenantId, input.counterpartyId],
+      );
+      if (counterparty.rowCount !== 1) throw new NotFoundException({ code: 'COUNTERPARTY_NOT_FOUND' });
+      const id = randomUUID();
+      try {
+        await client.query(
+          `INSERT INTO app.sales_contracts
+            (tenant_id,id,counterparty_id,reference,commodity,quantity_kg,sale_price_per_kg,
+             destination_code,delivery_start,delivery_end,required_documents,created_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+          [tenantId, id, input.counterpartyId, input.reference, input.commodity,
+            new Decimal(input.quantityKg).toFixed(3), new Decimal(input.salePricePerKg).toFixed(6),
+            input.destinationCode, input.deliveryStart, input.deliveryEnd, input.requiredDocuments, actorId],
+        );
+      } catch (error) {
+        if (isUniqueViolation(error)) throw new ConflictException({ code: 'SALES_CONTRACT_REFERENCE_EXISTS' });
+        throw error;
+      }
+      await this.record(client, tenantId, actorId, 'sales_contract.created', 'sales_contract', id, input);
+      return { id, status: 'ACTIVE', ...input };
+    });
+  }
+
+  updateSalesContract(tenantId: string, actorId: string, contractId: string, input: SalesContractInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'COMMERCIAL_EDIT');
+      const current = await client.query<{ status: string }>(
+        `SELECT status FROM app.sales_contracts WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+        [tenantId, contractId],
+      );
+      if (!current.rows[0]) throw new NotFoundException({ code: 'SALES_CONTRACT_NOT_FOUND' });
+      if (current.rows[0].status !== 'ACTIVE') throw new ConflictException({ code: 'SALES_CONTRACT_NOT_ACTIVE' });
+      const allocated = await client.query<{ allocated_kg: string }>(
+        `SELECT COALESCE(sum(quantity_kg) FILTER (WHERE status<>'RELEASED'),0)::text AS allocated_kg
+           FROM app.inventory_allocations WHERE tenant_id=$1 AND sales_contract_id=$2`,
+        [tenantId, contractId]);
+      if (new Decimal(input.quantityKg).lessThan(allocated.rows[0]!.allocated_kg)) {
+        throw new UnprocessableEntityException({ code: 'SALES_CONTRACT_BELOW_ALLOCATED_BALANCE' });
+      }
+      const counterparty = await client.query(
+        'SELECT 1 FROM app.counterparties WHERE tenant_id=$1 AND id=$2', [tenantId, input.counterpartyId]);
+      if (counterparty.rowCount !== 1) throw new NotFoundException({ code: 'COUNTERPARTY_NOT_FOUND' });
+      try {
+        await client.query(
+          `UPDATE app.sales_contracts SET counterparty_id=$3,reference=$4,commodity=$5,
+                  quantity_kg=$6,sale_price_per_kg=$7,destination_code=$8,delivery_start=$9,
+                  delivery_end=$10,required_documents=$11,updated_at=now()
+            WHERE tenant_id=$1 AND id=$2`,
+          [tenantId, contractId, input.counterpartyId, input.reference, input.commodity,
+            new Decimal(input.quantityKg).toFixed(3), new Decimal(input.salePricePerKg).toFixed(6),
+            input.destinationCode, input.deliveryStart, input.deliveryEnd, input.requiredDocuments],
+        );
+      } catch (error) {
+        if (isUniqueViolation(error)) throw new ConflictException({ code: 'SALES_CONTRACT_REFERENCE_EXISTS' });
+        throw error;
+      }
+      await this.record(client, tenantId, actorId, 'sales_contract.updated', 'sales_contract', contractId, input);
+      return { id: contractId, status: current.rows[0].status, ...input };
+    });
+  }
+
+  allocate(tenantId: string, actorId: string, input: AllocationInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'OPERATIONS_EDIT');
+      const lotBase = await client.query<{ commodity: string; status: string }>(
+        `SELECT commodity,status FROM app.inventory_lots WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+        [tenantId, input.lotId]);
+      if (!lotBase.rows[0]) throw new NotFoundException({ code: 'INVENTORY_LOT_NOT_FOUND' });
+      const lotBalance = await client.query<{ physical_kg: string; committed_kg: string }>(
+        `SELECT COALESCE((SELECT sum(m.quantity_delta_kg) FROM app.inventory_movements m
+                  WHERE m.tenant_id=$1 AND m.lot_id=$2),0)::text AS physical_kg,
+                COALESCE((SELECT sum(a.quantity_kg-COALESCE((SELECT sum(d.quantity_kg)
+                  FROM app.inventory_dispatches d WHERE d.tenant_id=a.tenant_id AND d.allocation_id=a.id),0))
+                  FROM app.inventory_allocations a WHERE a.tenant_id=$1 AND a.lot_id=$2
+                    AND a.status='ACTIVE'),0)::text AS committed_kg
+        `,
+        [tenantId, input.lotId],
+      );
+      if (lotBase.rows[0].status !== 'AVAILABLE') throw new ConflictException({ code: 'INVENTORY_LOT_NOT_AVAILABLE' });
+      const contractBase = await client.query<{ commodity: string; status: string; quantity_kg: string }>(
+        `SELECT commodity,status,quantity_kg::text FROM app.sales_contracts
+          WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenantId, input.salesContractId]);
+      if (!contractBase.rows[0]) throw new NotFoundException({ code: 'SALES_CONTRACT_NOT_FOUND' });
+      const contractAllocated = await client.query<{ allocated_kg: string }>(
+        `SELECT COALESCE(sum(quantity_kg) FILTER (WHERE status<>'RELEASED'),0)::text AS allocated_kg
+           FROM app.inventory_allocations WHERE tenant_id=$1 AND sales_contract_id=$2`,
+        [tenantId, input.salesContractId]);
+      if (contractBase.rows[0].status !== 'ACTIVE') throw new ConflictException({ code: 'SALES_CONTRACT_NOT_ACTIVE' });
+      if (contractBase.rows[0].commodity !== lotBase.rows[0].commodity) {
+        throw new UnprocessableEntityException({ code: 'ALLOCATION_COMMODITY_MISMATCH' });
+      }
+      const quantity = new Decimal(input.quantityKg);
+      const available = new Decimal(lotBalance.rows[0]!.physical_kg).minus(lotBalance.rows[0]!.committed_kg);
+      if (quantity.greaterThan(available)) {
+        throw new UnprocessableEntityException({ code: 'ALLOCATION_EXCEEDS_LOT_AVAILABILITY', availableWeightKg: available.toFixed(3) });
+      }
+      const contractBalance = new Decimal(contractBase.rows[0].quantity_kg).minus(contractAllocated.rows[0]!.allocated_kg);
+      if (quantity.greaterThan(contractBalance)) {
+        throw new UnprocessableEntityException({ code: 'ALLOCATION_EXCEEDS_CONTRACT_BALANCE', availableWeightKg: contractBalance.toFixed(3) });
+      }
+      const id = randomUUID();
+      await client.query(
+        `INSERT INTO app.inventory_allocations
+          (tenant_id,id,sales_contract_id,lot_id,quantity_kg,created_by)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [tenantId, id, input.salesContractId, input.lotId, quantity.toFixed(3), actorId]);
+      await this.record(client, tenantId, actorId, 'inventory.allocated', 'inventory_allocation', id, input);
+      return { id, status: 'ACTIVE', ...input, quantityKg: quantity.toFixed(3) };
+    });
+  }
+
+  releaseAllocation(tenantId: string, actorId: string, allocationId: string) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'OPERATIONS_EDIT');
+      const allocation = await client.query<{ status: string }>(
+        `SELECT status FROM app.inventory_allocations WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+        [tenantId, allocationId]);
+      if (!allocation.rows[0]) throw new NotFoundException({ code: 'ALLOCATION_NOT_FOUND' });
+      if (allocation.rows[0].status !== 'ACTIVE') throw new ConflictException({ code: 'ALLOCATION_NOT_ACTIVE' });
+      const dispatched = await client.query<{ dispatched_kg: string }>(
+        `SELECT COALESCE(sum(quantity_kg),0)::text AS dispatched_kg FROM app.inventory_dispatches
+          WHERE tenant_id=$1 AND allocation_id=$2`, [tenantId, allocationId]);
+      if (!new Decimal(dispatched.rows[0]!.dispatched_kg).isZero()) {
+        throw new ConflictException({ code: 'ALLOCATION_WITH_DISPATCH_CANNOT_BE_RELEASED' });
+      }
+      await client.query(`UPDATE app.inventory_allocations SET status='RELEASED',released_at=now()
+        WHERE tenant_id=$1 AND id=$2`, [tenantId, allocationId]);
+      await this.record(client, tenantId, actorId, 'inventory.allocation_released', 'inventory_allocation', allocationId, {});
+      return { id: allocationId, status: 'RELEASED' };
+    });
+  }
+
+  dispatch(tenantId: string, actorId: string, input: DispatchInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'OPERATIONS_EDIT');
+      const allocation = await client.query<{
+        status: string; quantity_kg: string; lot_id: string;
+      }>(
+        `SELECT status,quantity_kg::text,lot_id FROM app.inventory_allocations
+          WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+        [tenantId, input.allocationId]);
+      if (!allocation.rows[0]) throw new NotFoundException({ code: 'ALLOCATION_NOT_FOUND' });
+      await client.query(`SELECT 1 FROM app.inventory_lots WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+        [tenantId, allocation.rows[0].lot_id]);
+      const balances = await client.query<{ dispatched_kg: string; physical_kg: string }>(
+        `SELECT COALESCE((SELECT sum(quantity_kg) FROM app.inventory_dispatches
+                  WHERE tenant_id=$1 AND allocation_id=$2),0)::text AS dispatched_kg,
+                COALESCE((SELECT sum(quantity_delta_kg) FROM app.inventory_movements
+                  WHERE tenant_id=$1 AND lot_id=$3),0)::text AS physical_kg`,
+        [tenantId, input.allocationId, allocation.rows[0].lot_id]);
+      if (allocation.rows[0].status !== 'ACTIVE') throw new ConflictException({ code: 'ALLOCATION_NOT_ACTIVE' });
+      const quantity = new Decimal(input.quantityKg);
+      const remaining = new Decimal(allocation.rows[0].quantity_kg).minus(balances.rows[0]!.dispatched_kg);
+      if (quantity.greaterThan(remaining)) {
+        throw new UnprocessableEntityException({ code: 'DISPATCH_EXCEEDS_ALLOCATION_BALANCE', availableWeightKg: remaining.toFixed(3) });
+      }
+      if (quantity.greaterThan(balances.rows[0]!.physical_kg)) {
+        throw new UnprocessableEntityException({ code: 'DISPATCH_EXCEEDS_PHYSICAL_BALANCE' });
+      }
+      const id = randomUUID();
+      await client.query(
+        `INSERT INTO app.inventory_dispatches
+          (tenant_id,id,allocation_id,quantity_kg,dispatched_at,vehicle_plate,document_reference,notes,created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [tenantId, id, input.allocationId, quantity.toFixed(3), input.dispatchedAt,
+          input.vehiclePlate, input.documentReference, input.notes, actorId]);
+      await client.query(
+        `INSERT INTO app.inventory_movements
+          (tenant_id,id,lot_id,allocation_id,dispatch_id,movement_type,quantity_delta_kg,occurred_at,created_by)
+         VALUES ($1,$2,$3,$4,$5,'DISPATCH',$6,$7,$8)`,
+        [tenantId, randomUUID(), allocation.rows[0].lot_id, input.allocationId, id,
+          quantity.negated().toFixed(3), input.dispatchedAt, actorId]);
+      if (quantity.equals(remaining)) {
+        await client.query(`UPDATE app.inventory_allocations SET status='FULFILLED'
+          WHERE tenant_id=$1 AND id=$2`, [tenantId, input.allocationId]);
+      }
+      await this.record(client, tenantId, actorId, 'inventory.dispatched', 'inventory_dispatch', id, input);
+      return { id, allocationId: input.allocationId, quantityKg: quantity.toFixed(3), status: 'CONFIRMED' };
     });
   }
 
@@ -202,4 +460,34 @@ export class InventoryService extends InventoryReceiptPort {
     );
     if (result.rowCount !== 1) throw new NotFoundException({ code: 'ACTIVE_MEMBERSHIP_NOT_FOUND' });
   }
+
+  private async assertCapability(client: PoolClient, tenantId: string, actorId: string, capability: string) {
+    const result = await client.query<{ capabilities: string[] }>(
+      `SELECT capabilities FROM app.memberships WHERE tenant_id=$1 AND user_id=$2 AND active=true`,
+      [tenantId, actorId]);
+    if (!result.rows[0]) throw new NotFoundException({ code: 'ACTIVE_MEMBERSHIP_NOT_FOUND' });
+    if (!result.rows[0].capabilities.includes(capability)) {
+      throw new NotFoundException({ code: 'CAPABILITY_NOT_FOUND' });
+    }
+  }
+
+  private async record(client: PoolClient, tenantId: string, actorId: string,
+    eventType: string, aggregateType: string, aggregateId: string, payload: unknown) {
+    const id = randomUUID();
+    const body = JSON.stringify(payload);
+    await client.query(
+      `INSERT INTO app.audit_events
+        (tenant_id,id,actor_id,event_type,aggregate_type,aggregate_id,payload)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)`,
+      [tenantId, id, actorId, eventType, aggregateType, aggregateId, body]);
+    await client.query(
+      `INSERT INTO app.outbox_events
+        (tenant_id,id,event_type,aggregate_type,aggregate_id,payload)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb)`,
+      [tenantId, id, eventType, aggregateType, aggregateId, body]);
+  }
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === '23505';
 }

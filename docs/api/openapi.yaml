@@ -156,6 +156,52 @@ paths:
       summary: Retorna posição por lote e o livro de movimentos do tenant
       responses:
         '200': { description: Saldos físicos, lotes e movimentos calculados no backend }
+  /v1/inventory/sales-contracts:
+    post:
+      summary: Cria um contrato de venda ativo
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/SalesContractInput' } } }
+      responses:
+        '201': { description: Contrato de venda criado }
+        '409': { description: Referência já utilizada }
+  /v1/inventory/sales-contracts/{contractId}:
+    put:
+      summary: Atualiza contrato de venda sem reduzir abaixo do volume alocado
+      parameters:
+        - { name: contractId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/SalesContractInput' } } }
+      responses:
+        '200': { description: Contrato atualizado }
+        '422': { description: Volume inferior ao saldo já alocado }
+  /v1/inventory/allocations:
+    post:
+      summary: Reserva saldo disponível de um lote para contrato de venda
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/AllocationInput' } } }
+      responses:
+        '201': { description: Alocação criada }
+        '422': { description: Saldo de lote ou contrato insuficiente }
+  /v1/inventory/allocations/{allocationId}/release:
+    post:
+      summary: Libera alocação ativa que ainda não possui expedições
+      parameters:
+        - { name: allocationId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '201': { description: Alocação liberada }
+        '409': { description: Alocação já executada ou inativa }
+  /v1/inventory/dispatches:
+    post:
+      summary: Registra expedição e movimento negativo de estoque atomicamente
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/DispatchInput' } } }
+      responses:
+        '201': { description: Expedição confirmada }
+        '422': { description: Saldo alocado ou físico insuficiente }
   /v1/settings/margin-policy/MILHO:
     get:
       summary: Retorna a política ativa de margem do milho
@@ -227,4 +273,37 @@ components:
         impurityPct: { type: string, pattern: '^\d+(?:\.\d{1,4})?$' }
         damagedPct: { type: string, pattern: '^\d+(?:\.\d{1,4})?$' }
         qualityDecision: { enum: [ACCEPTED, REVIEW_REQUIRED] }
+        notes: { type: [string, 'null'], maxLength: 1000 }
+    SalesContractInput:
+      type: object
+      additionalProperties: false
+      required: [counterpartyId, reference, commodity, quantityKg, salePricePerKg, destinationCode, deliveryStart, deliveryEnd, requiredDocuments]
+      properties:
+        counterpartyId: { type: string, format: uuid }
+        reference: { type: string, minLength: 3, maxLength: 40 }
+        commodity: { const: MILHO }
+        quantityKg: { $ref: '#/components/schemas/DecimalString' }
+        salePricePerKg: { $ref: '#/components/schemas/DecimalString' }
+        destinationCode: { type: string, pattern: '^[A-Z0-9][A-Z0-9_-]{1,31}$' }
+        deliveryStart: { type: string, format: date }
+        deliveryEnd: { type: string, format: date }
+        requiredDocuments: { type: array, maxItems: 20, items: { type: string, maxLength: 80 } }
+    AllocationInput:
+      type: object
+      additionalProperties: false
+      required: [salesContractId, lotId, quantityKg]
+      properties:
+        salesContractId: { type: string, format: uuid }
+        lotId: { type: string, format: uuid }
+        quantityKg: { $ref: '#/components/schemas/DecimalString' }
+    DispatchInput:
+      type: object
+      additionalProperties: false
+      required: [allocationId, quantityKg, dispatchedAt, vehiclePlate, documentReference, notes]
+      properties:
+        allocationId: { type: string, format: uuid }
+        quantityKg: { $ref: '#/components/schemas/DecimalString' }
+        dispatchedAt: { type: string, format: date-time }
+        vehiclePlate: { type: string, pattern: '^[A-Z]{3}[0-9][A-Z0-9][0-9]{2}$' }
+        documentReference: { type: string, minLength: 1, maxLength: 80 }
         notes: { type: [string, 'null'], maxLength: 1000 }

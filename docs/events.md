@@ -13,6 +13,11 @@
 | `load.receiving_started` | load | operador inicia o recebimento | pátio, fila de trabalho |
 | `load.receipt_recorded` | load | primeira pesagem e classificação registradas | estoque, saldo contratual |
 | `load.receipt_corrected` | load | nova versão substitui o registro vigente | estoque, reconciliação |
+| `sales_contract.created` | sales_contract | demanda de venda é formalizada | alocação, carteira de venda |
+| `sales_contract.updated` | sales_contract | condições ainda executáveis são alteradas | carteira de venda, auditoria |
+| `inventory.allocated` | inventory_allocation | lote é reservado para contrato de venda | disponibilidade, programação |
+| `inventory.allocation_released` | inventory_allocation | reserva sem expedição é liberada | disponibilidade |
+| `inventory.dispatched` | inventory_dispatch | saída parcial ou total é confirmada | estoque, saldo contratual, financeiro futuro |
 
 Todos carregam `id`, `tenant_id`, tipo, agregado, payload mínimo e instante. A outbox é gravada na mesma transação da mudança. Publicação é pelo menos uma vez; consumidores deduplicam por `id`.
 
@@ -24,6 +29,7 @@ Todos carregam `id`, `tenant_id`, tipo, agregado, payload mínimo e instante. A 
 - `commercial_activity_read_model` registra a linha do tempo de todos os eventos;
 - `contract_summary_read_model` é criada idempotentemente por `contract.activated`;
 - o módulo de estoque registra, na mesma transação do recebimento, entrada, correção ou estorno compensatório; o saldo é sempre a soma do livro de movimentos;
+- alocações alteram somente disponibilidade; expedições criam movimento `DISPATCH` negativo e atualizam o saldo executado da venda na mesma transação;
 - `published_at` indica entrega aos consumidores internos atuais.
 - o worker expõe saúde em `/health/live` e `/health/ready` e métricas em `/metrics` na porta operacional própria;
 - falha, retentativa e recuperação geram logs JSON sem payload de negócio.

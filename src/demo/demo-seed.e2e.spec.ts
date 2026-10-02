@@ -33,6 +33,7 @@ describe.runIf(Boolean(databaseUrl))('canonical demo tenant seed', () => {
       '20261002162513_operations_receiving_quality.sql',
       '20261002163915_grant_demo_reset_load_receipts.sql',
       '20261002174124_inventory_receipt_ledger.sql',
+      '20261002211618_sales_fulfillment_slice.sql',
     ]) {
       await pool.query(await readFile(new URL(`../../supabase/migrations/${migrationName}`, import.meta.url), 'utf8'));
     }
@@ -63,14 +64,17 @@ describe.runIf(Boolean(databaseUrl))('canonical demo tenant seed', () => {
     const first = await resetDemoTenant(pool, { tenantId: demoTenantId, actorId: demoActorId });
     expect(first).toEqual({
       tenantId: demoTenantId,
-      seedVersion: 3,
-      counterparties: 4,
+      seedVersion: 4,
+      counterparties: 5,
       offers: 4,
       contracts: 2,
       loads: 3,
       receipts: 2,
       inventoryLots: 1,
-      inventoryMovements: 1,
+      inventoryMovements: 2,
+      salesContracts: 1,
+      allocations: 1,
+      dispatches: 1,
     });
 
     const data = await pool.query<{
@@ -83,6 +87,9 @@ describe.runIf(Boolean(databaseUrl))('canonical demo tenant seed', () => {
       receipts: number;
       inventory_lots: number;
       inventory_movements: number;
+      sales_contracts: number;
+      allocations: number;
+      dispatches: number;
       contracted_sc: string;
       scheduled_kg: string;
     }>(
@@ -94,6 +101,9 @@ describe.runIf(Boolean(databaseUrl))('canonical demo tenant seed', () => {
               (SELECT count(*)::integer FROM app.load_receipts WHERE tenant_id=t.id) AS receipts,
               (SELECT count(*)::integer FROM app.inventory_lots WHERE tenant_id=t.id) AS inventory_lots,
               (SELECT count(*)::integer FROM app.inventory_movements WHERE tenant_id=t.id) AS inventory_movements,
+              (SELECT count(*)::integer FROM app.sales_contracts WHERE tenant_id=t.id) AS sales_contracts,
+              (SELECT count(*)::integer FROM app.inventory_allocations WHERE tenant_id=t.id) AS allocations,
+              (SELECT count(*)::integer FROM app.inventory_dispatches WHERE tenant_id=t.id) AS dispatches,
               (SELECT sum(quantity_sc)::text FROM app.offers WHERE tenant_id=t.id AND status='CONVERTED') AS contracted_sc,
               (SELECT sum(expected_weight_kg)::text FROM app.loads WHERE tenant_id=t.id) AS scheduled_kg
          FROM app.tenants t WHERE t.id=$1`,
@@ -101,14 +111,17 @@ describe.runIf(Boolean(databaseUrl))('canonical demo tenant seed', () => {
     );
     expect(data.rows[0]).toEqual({
       legal_name: 'Cerrado Trading — Demonstração',
-      demo_seed_version: 3,
-      counterparties: 4,
+      demo_seed_version: 4,
+      counterparties: 5,
       offers: 4,
       contracts: 2,
       loads: 3,
       receipts: 2,
       inventory_lots: 1,
-      inventory_movements: 1,
+      inventory_movements: 2,
+      sales_contracts: 1,
+      allocations: 1,
+      dispatches: 1,
       contracted_sc: '32500.000000',
       scheduled_kg: '144000.000',
     });
