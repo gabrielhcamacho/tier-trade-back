@@ -2,12 +2,15 @@
   "name": "@mountier/tier-trade-api",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@10.33.3",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
+    "start:api:production": "node dist/config/check-environment.js && node dist/main.js",
+    "start:worker:production": "TIER_TRADE_PROCESS=worker node dist/config/check-environment.js && node dist/outbox/worker.js",
     "dev": "tsx watch src/main.ts",
     "environment:check": "tsx src/config/check-environment.ts",
     "worker:outbox": "tsx src/outbox/worker.ts",
