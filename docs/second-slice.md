@@ -7,6 +7,7 @@ Um usuário autorizado programa uma carga para um contrato ativo. O sistema inte
 ## Dentro desta entrega
 
 - Entidade `app.loads` isolada por tenant com RLS habilitada e forçada.
+- Grant explícito e restrito da tabela para o papel de runtime da API.
 - Capability `OPERATIONS_EDIT` separada das permissões comerciais.
 - Programação vinculada a contrato ativo.
 - Validação da janela contratual no fuso do tenant.

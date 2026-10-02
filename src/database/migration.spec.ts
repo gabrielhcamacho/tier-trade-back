@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 describe('commercial foundation migration', () => {
   it('applies and isolates rows through the transaction tenant context', async () => {
     const db = new PGlite();
+    await db.exec('CREATE ROLE tier_trade_runtime NOLOGIN NOSUPERUSER NOBYPASSRLS');
     for (const migrationName of [
       '20261001000100_commercial_foundation.sql',
       '20261001000200_outbox_read_models.sql',
@@ -14,6 +15,7 @@ describe('commercial foundation migration', () => {
       '20261001224302_control_plane_access.sql',
       '20261001224527_index_control_invitation_inviter.sql',
       '20261002030013_operations_load_scheduling.sql',
+      '20261002031951_grant_operations_runtime.sql',
     ]) {
       const migration = await readFile(new URL(`../../supabase/migrations/${migrationName}`, import.meta.url), 'utf8');
       await db.exec(migration);
@@ -57,6 +59,10 @@ describe('commercial foundation migration', () => {
       { table_name: 'commercial_activity_read_model' },
       { table_name: 'contract_summary_read_model' },
     ]);
+    await db.exec("SET ROLE tier_trade_runtime; SELECT set_config('app.tenant_id','11111111-1111-4111-8111-111111111111',false)");
+    const visibleLoads = await db.query<{ count: number }>('SELECT count(*)::int AS count FROM app.loads');
+    expect(visibleLoads.rows).toEqual([{ count: 0 }]);
+    await db.exec('RESET ROLE');
     await db.close();
   });
 });
