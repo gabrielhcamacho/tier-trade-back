@@ -4,9 +4,11 @@ import { Identity, type RequestIdentity, RequestIdentityGuard } from '../auth/re
 import { SchemaPipe } from '../common/schema.pipe.js';
 import {
   createTitleSchema,
+  payTitleSchema,
   reverseSettlementSchema,
   settleTitleSchema,
   type CreateTitleInput,
+  type PayTitleInput,
   type ReverseSettlementInput,
   type SettleTitleInput,
 } from './finance.schemas.js';
@@ -42,5 +44,19 @@ export class FinanceController {
     @Param('settlementId', ParseUUIDPipe) settlementId: string,
     @Body(new SchemaPipe(reverseSettlementSchema)) input: ReverseSettlementInput) {
     return this.service.reverseSettlement(identity.tenantId, identity.actorId, settlementId, input);
+  }
+
+  @Post('titles/:titleId/payments')
+  pay(@Identity() identity: RequestIdentity,
+    @Param('titleId', ParseUUIDPipe) titleId: string,
+    @Body(new SchemaPipe(payTitleSchema)) input: PayTitleInput) {
+    return this.service.pay(identity.tenantId, identity.actorId, titleId, input);
+  }
+
+  @Post('payments/:paymentId/reverse')
+  reversePayment(@Identity() identity: RequestIdentity,
+    @Param('paymentId', ParseUUIDPipe) paymentId: string,
+    @Body(new SchemaPipe(reverseSettlementSchema)) input: ReverseSettlementInput) {
+    return this.service.reversePayment(identity.tenantId, identity.actorId, paymentId, input);
   }
 }

@@ -244,6 +244,35 @@ paths:
       responses:
         '201': { description: Baixa estornada e saldo recomposto }
         '409': { description: Baixa já estornada }
+  /v1/finance/titles/{titleId}/payments:
+    post:
+      summary: Registra pagamento parcial ou total de um título fiscal
+      parameters:
+        - { name: titleId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PayFinancialTitle' } } }
+      responses:
+        '201': { description: Pagamento registrado; título, obrigação e caixa atualizados atomicamente }
+        '409': { description: Título não é uma obrigação fiscal ou referência bancária já utilizada }
+        '422': { description: Pagamento superior ao saldo em aberto }
+  /v1/finance/payments/{paymentId}/reverse:
+    post:
+      summary: Estorna pagamento fiscal preservando o registro original
+      parameters:
+        - { name: paymentId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason]
+              properties: { reason: { type: string, minLength: 3, maxLength: 500 } }
+      responses:
+        '201': { description: Pagamento estornado; saldos e status recompostos }
+        '409': { description: Pagamento já estornado }
   /v1/risk:
     get:
       summary: Consolida posição física, contratual, financeira e limites do tenant
@@ -513,6 +542,15 @@ components:
       properties:
         amount: { type: string, pattern: '^\d+(?:\.\d{1,2})?$' }
         receivedAt: { type: string, format: date-time }
+        bankReference: { type: string, minLength: 1, maxLength: 80 }
+        notes: { type: [string, 'null'], maxLength: 1000 }
+    PayFinancialTitle:
+      type: object
+      additionalProperties: false
+      required: [amount, paidAt, bankReference, notes]
+      properties:
+        amount: { type: string, pattern: '^\d+(?:\.\d{1,2})?$' }
+        paidAt: { type: string, format: date-time }
         bankReference: { type: string, minLength: 1, maxLength: 80 }
         notes: { type: [string, 'null'], maxLength: 1000 }
     ConfigureRiskPolicy:

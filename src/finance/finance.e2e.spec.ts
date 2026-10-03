@@ -37,6 +37,7 @@ describe.runIf(Boolean(databaseUrl))('financial receivables', () => {
       '20261003003904_fiscal_configuration_catalog.sql',
       '20261003011929_fiscal_calculation_engine.sql',
       '20261003014022_fiscal_obligations_and_financial_effects.sql',
+      '20261003194521_fiscal_payments_and_cash_flow.sql',
     ];
     for (const migration of migrations) {
       await setup.query(await readFile(new URL(`../../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
@@ -113,6 +114,16 @@ describe.runIf(Boolean(databaseUrl))('financial receivables', () => {
     });
     expect(title.statusCode, title.body).toBe(201);
     expect(title.json()).toMatchObject({ amount: '1500.00', status: 'OPEN' });
+
+    const invalidPayment = await server.inject({
+      method: 'POST', url: `/v1/finance/titles/${title.json().id}/payments`, headers,
+      payload: {
+        amount: '100.00', paidAt: '2026-10-03T08:30:00-03:00',
+        bankReference: 'PAGAMENTO-EM-RECEBIVEL', notes: null,
+      },
+    });
+    expect(invalidPayment.statusCode).toBe(409);
+    expect(invalidPayment.json()).toMatchObject({ code: 'RECEIVABLE_PAYMENT_FLOW_NOT_AVAILABLE' });
 
     const receipt = await server.inject({
       method: 'POST', url: `/v1/finance/titles/${title.json().id}/settlements`, headers,

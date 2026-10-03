@@ -17,5 +17,5 @@ Aceite, obrigações, ajustes, título fiscal, auditoria e outbox são atômicos
 - pagamento à contraparte e recolhimento fiscal têm saldos e ciclos de vida distintos;
 - cálculo manual pode criar obrigação, mas não reduzir título de origem;
 - reduzir título exige cálculo ligado a evento financeiro com título existente e valor suficiente;
-- esta fatia não implementa baixa de contas a pagar nem lançamento contábil;
+- a baixa de contas a pagar é definida pelo ADR 0016; lançamento contábil permanece em fatia posterior;
 - tratamentos, alíquotas, responsabilidade e efeitos continuam dados confirmados pelo usuário, sem interpretação fiscal embutida.

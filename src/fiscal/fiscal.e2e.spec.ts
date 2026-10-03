@@ -36,6 +36,7 @@ describe.runIf(Boolean(databaseUrl))('fiscal document registry', () => {
       '20261003003904_fiscal_configuration_catalog.sql',
       '20261003011929_fiscal_calculation_engine.sql',
       '20261003014022_fiscal_obligations_and_financial_effects.sql',
+      '20261003194521_fiscal_payments_and_cash_flow.sql',
     ]) {
       await setup.query(await readFile(new URL(`../../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
     }
@@ -239,6 +240,62 @@ describe.runIf(Boolean(databaseUrl))('fiscal document registry', () => {
     const financeWorkspace = await server.inject({ method: 'GET', url: '/v1/finance', headers });
     expect(financeWorkspace.json()).toMatchObject({
       summary: { receivableAmount: '6564.80', payableAmount: '3945.20' },
+    });
+    const fiscalPayable = financeWorkspace.json().events.find(
+      (event: { title: { number: string } | null }) => event.title?.number === 'TF-ICMS-0001',
+    );
+    const partialPayment = await server.inject({
+      method: 'POST', url: `/v1/finance/titles/${fiscalPayable.title.id}/payments`, headers,
+      payload: {
+        amount: '1000.00', paidAt: '2026-10-03T14:00:00-03:00',
+        bankReference: 'PAG-FISCAL-ICMS-01', notes: 'Pagamento parcial da obrigação fiscal.',
+      },
+    });
+    expect(partialPayment.statusCode, partialPayment.body).toBe(201);
+    expect(partialPayment.json()).toMatchObject({
+      status: 'PARTIALLY_SETTLED', outstandingAmount: '2150.00',
+    });
+    const overflowPayment = await server.inject({
+      method: 'POST', url: `/v1/finance/titles/${fiscalPayable.title.id}/payments`, headers,
+      payload: {
+        amount: '2150.01', paidAt: '2026-10-03T14:30:00-03:00',
+        bankReference: 'PAG-FISCAL-ICMS-OVERFLOW', notes: null,
+      },
+    });
+    expect(overflowPayment.statusCode).toBe(422);
+    expect(overflowPayment.json()).toMatchObject({ code: 'PAYMENT_EXCEEDS_TITLE_BALANCE' });
+    const finalPayment = await server.inject({
+      method: 'POST', url: `/v1/finance/titles/${fiscalPayable.title.id}/payments`, headers,
+      payload: {
+        amount: '2150.00', paidAt: '2026-10-03T15:00:00-03:00',
+        bankReference: 'PAG-FISCAL-ICMS-02', notes: 'Liquidação integral da obrigação fiscal.',
+      },
+    });
+    expect(finalPayment.statusCode, finalPayment.body).toBe(201);
+    expect(finalPayment.json()).toMatchObject({ status: 'SETTLED', outstandingAmount: '0.00' });
+    const paidWorkspace = await server.inject({ method: 'GET', url: '/v1/finance', headers });
+    expect(paidWorkspace.json()).toMatchObject({
+      summary: { paidAmount: '3150.00', payableAmount: '795.20', netCashFlowAmount: '850.00' },
+      payments: expect.arrayContaining([
+        expect.objectContaining({ titleNumber: 'TF-ICMS-0001', amount: '1000.00', reversedAt: null }),
+        expect.objectContaining({ titleNumber: 'TF-ICMS-0001', amount: '2150.00', reversedAt: null }),
+      ]),
+    });
+    const settledObligation = await server.inject({ method: 'GET', url: '/v1/fiscal', headers });
+    expect(settledObligation.json().obligations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ amount: '3150.000000', status: 'SETTLED', payable: expect.objectContaining({
+        paidAmount: '3150.00', outstandingAmount: '0.00', status: 'SETTLED',
+      }) }),
+    ]));
+    const paymentReversal = await server.inject({
+      method: 'POST', url: `/v1/finance/payments/${finalPayment.json().id}/reverse`, headers,
+      payload: { reason: 'Estorno controlado do segundo pagamento fiscal.' },
+    });
+    expect(paymentReversal.statusCode, paymentReversal.body).toBe(201);
+    expect(paymentReversal.json()).toMatchObject({ status: 'PARTIALLY_SETTLED', reversed: true });
+    const reversedWorkspace = await server.inject({ method: 'GET', url: '/v1/finance', headers });
+    expect(reversedWorkspace.json()).toMatchObject({
+      summary: { paidAmount: '1000.00', payableAmount: '2945.20', netCashFlowAmount: '3000.00' },
     });
     const settleAdjustedTitle = await server.inject({
       method: 'POST', url: '/v1/finance/titles/e1000000-0000-4000-8000-000000000001/settlements', headers,

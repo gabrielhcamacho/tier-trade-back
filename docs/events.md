@@ -24,6 +24,8 @@
 | `finance.receipt_reversed` | financial_settlement | baixa é estornada com motivo | caixa, conciliação, auditoria |
 | `finance.title_adjusted` | financial_title_adjustment | retenção confirmada reduz o saldo do título comercial sem alterar seu valor original | contas a receber/pagar, auditoria |
 | `finance.tax_payable_projected` | financial_event | obrigação sob responsabilidade do tenant gera título separado em favor da autoridade | contas a pagar, caixa |
+| `finance.payment_recorded` | financial_payment | pagamento parcial ou total de título fiscal é confirmado | caixa, obrigação fiscal, conciliação |
+| `finance.payment_reversed` | financial_payment | pagamento fiscal é estornado com motivo | caixa, obrigação fiscal, conciliação, auditoria |
 | `fiscal.document_received` | fiscal_document | NF-e é vinculada à expedição e ao evento financeiro | validação fiscal, auditoria |
 | `fiscal.document_corrected` | fiscal_document | dados do documento são corrigidos e voltam à conferência | validação fiscal, financeiro |
 | `fiscal.document_validated` | fiscal_document | chave e valor são conferidos e o título é vinculado | financeiro, reconciliação |
@@ -54,6 +56,7 @@ Todos carregam `id`, `tenant_id`, tipo, agregado, payload mínimo e instante. A 
 - validação fiscal compara o total da NF-e ao evento financeiro; não calcula tributos e liga o título apenas quando não há divergência;
 - configurações fiscais ativas são imutáveis e o motor registra entrada, versão, bases, alíquotas, valores não arredondados, arredondamento e resultado;
 - o aceite fiscal cria obrigações e seus efeitos financeiros na mesma transação; a redução do título comercial e o título a pagar à autoridade são fatos separados;
+- pagamentos fiscais usam livro próprio; registro e estorno recompõem título, obrigação e caixa na mesma transação;
 - `published_at` indica entrega aos consumidores internos atuais.
 - o worker expõe saúde em `/health/live` e `/health/ready` e métricas em `/metrics` na porta operacional própria;
 - falha, retentativa e recuperação geram logs JSON sem payload de negócio.

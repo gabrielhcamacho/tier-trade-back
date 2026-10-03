@@ -18,4 +18,4 @@
 
 ## Limites
 
-Não há interpretação automática de legislação, baixa de contas a pagar, emissão de guia, integração bancária ou contabilização nesta fatia.
+Não há interpretação automática de legislação, emissão de guia, integração bancária ou contabilização nesta fatia. A baixa de contas a pagar foi adicionada na fatia seguinte e está documentada separadamente.

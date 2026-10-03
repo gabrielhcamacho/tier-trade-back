@@ -42,6 +42,7 @@ describe.runIf(Boolean(databaseUrl))('canonical demo tenant seed', () => {
       '20261003003904_fiscal_configuration_catalog.sql',
       '20261003011929_fiscal_calculation_engine.sql',
       '20261003014022_fiscal_obligations_and_financial_effects.sql',
+      '20261003194521_fiscal_payments_and_cash_flow.sql',
     ]) {
       await pool.query(await readFile(new URL(`../../supabase/migrations/${migrationName}`, import.meta.url), 'utf8'));
     }

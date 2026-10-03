@@ -59,7 +59,8 @@ type FiscalObligationRow = {
   authority_name: string; competence_date: string; due_date: string; amount: string;
   currency: string; retained: boolean; title_effect: string; payment_responsibility: string;
   status: string; created_at: Date; payable_event_id: string | null; payable_title_id: string | null;
-  payable_title_number: string | null; adjustment_id: string | null; adjusted_title_id: string | null;
+  payable_title_number: string | null; payable_amount: string | null; payable_paid: string;
+  payable_status: string | null; adjustment_id: string | null; adjusted_title_id: string | null;
 };
 
 @Injectable()
@@ -152,7 +153,9 @@ export class FiscalService {
                 fo.amount::text,fo.currency,fo.retained,fo.title_effect,
                 fo.payment_responsibility,fo.status,fo.created_at,
                 pfe.id AS payable_event_id,pft.id AS payable_title_id,
-                pft.title_number AS payable_title_number,fta.id AS adjustment_id,
+                pft.title_number AS payable_title_number,pft.amount::text AS payable_amount,
+                COALESCE(pp.paid,0)::text AS payable_paid,pft.status AS payable_status,
+                fta.id AS adjustment_id,
                 fta.title_id AS adjusted_title_id
            FROM app.fiscal_obligations fo
            JOIN app.fiscal_authorities fa
@@ -161,6 +164,11 @@ export class FiscalService {
              ON (pfe.tenant_id,pfe.fiscal_obligation_id)=(fo.tenant_id,fo.id)
            LEFT JOIN app.financial_titles pft
              ON (pft.tenant_id,pft.financial_event_id)=(pfe.tenant_id,pfe.id)
+           LEFT JOIN LATERAL (
+             SELECT COALESCE(sum(p.amount) FILTER (WHERE p.reversed_at IS NULL),0)::numeric(20,2) AS paid
+               FROM app.financial_payments p
+              WHERE p.tenant_id=pft.tenant_id AND p.title_id=pft.id
+           ) pp ON true
            LEFT JOIN app.financial_title_adjustments fta
              ON (fta.tenant_id,fta.fiscal_obligation_id)=(fo.tenant_id,fo.id)
           WHERE fo.tenant_id=$1 ORDER BY fo.due_date,fo.created_at,fo.id`, [tenantId]);
@@ -197,7 +205,8 @@ export class FiscalService {
           validated: mapped.filter((document) => document.status === 'VALIDATED').length,
           rejected: mapped.filter((document) => document.status === 'REJECTED').length,
           linkedTitles: mapped.filter((document) => document.title !== null).length,
-          openObligations: obligations.rows.filter((obligation) => obligation.status === 'OPEN').length,
+          openObligations: obligations.rows.filter(
+            (obligation) => obligation.status === 'OPEN' || obligation.status === 'PARTIALLY_SETTLED').length,
           taxPayables: obligations.rows.filter((obligation) => obligation.payable_title_id !== null).length,
         },
         documents: mapped,
@@ -223,6 +232,12 @@ export class FiscalService {
           payable: row.payable_event_id ? {
             eventId: row.payable_event_id, titleId: row.payable_title_id,
             titleNumber: row.payable_title_number,
+            amount: row.payable_amount,
+            paidAmount: row.payable_paid,
+            outstandingAmount: row.payable_amount
+              ? Decimal.max(new Decimal(row.payable_amount).minus(row.payable_paid), 0).toFixed(2)
+              : null,
+            status: row.payable_status,
           } : null,
           titleAdjustment: row.adjustment_id ? {
             id: row.adjustment_id, titleId: row.adjusted_title_id,

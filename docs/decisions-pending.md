@@ -32,4 +32,5 @@
 - documentos fiscais podem ser recebidos, corrigidos, validados e rejeitados; o cálculo tributário só ocorre com configuração ativa e homologada.
 - estabelecimentos e configurações fiscais podem ser cadastrados, editados, ativados e versionados; versões ativas são imutáveis e registram base e arredondamento explícitos.
 - o motor fiscal seleciona uma versão por contexto e vigência, usa Decimal, é idempotente e persiste memória imutável;
-- o aceite fiscal gera obrigações, ajuste separado do título comercial e conta a pagar separada para a autoridade; baixa de contas a pagar e contabilização permanecem para as próximas fatias.
+- o aceite fiscal gera obrigações, ajuste separado do título comercial e conta a pagar separada para a autoridade;
+- pagamentos fiscais parciais ou totais e seus estornos atualizam obrigação, título e caixa atomicamente; conciliação bancária e contabilização permanecem para as próximas fatias.

@@ -6,7 +6,9 @@ import { DatabasePlatformPort } from '../database/database.js';
 import {
   FinancialProjectionPort, type ApplyFiscalObligationInput, type ProjectSalesDispatchInput,
 } from './finance.port.js';
-import type { CreateTitleInput, ReverseSettlementInput, SettleTitleInput } from './finance.schemas.js';
+import type {
+  CreateTitleInput, PayTitleInput, ReverseSettlementInput, SettleTitleInput,
+} from './finance.schemas.js';
 
 type FinancialEventRow = {
   id: string;
@@ -37,7 +39,22 @@ type FinancialEventRow = {
   title_amount: string | null;
   title_status: string | null;
   settled_amount: string;
+  paid_amount: string;
   adjusted_amount: string;
+};
+
+type PaymentRow = {
+  id: string;
+  title_id: string;
+  fiscal_obligation_id: string;
+  title_number: string;
+  authority_name: string;
+  amount: string;
+  paid_at: Date;
+  bank_reference: string;
+  notes: string | null;
+  reversed_at: Date | null;
+  reversal_reason: string | null;
 };
 
 type SettlementRow = {
@@ -74,6 +91,7 @@ export class FinanceService extends FinancialProjectionPort {
                 ft.document_reference AS title_document_reference,ft.due_date::text,
                 ft.amount::text AS title_amount,ft.status AS title_status,
                 COALESCE(st.settled_amount,0)::text AS settled_amount,
+                COALESCE(fp.paid_amount,0)::text AS paid_amount,
                 COALESCE(adj.adjusted_amount,0)::text AS adjusted_amount
            FROM app.financial_events fe
            LEFT JOIN app.sales_contracts sc
@@ -92,6 +110,11 @@ export class FinanceService extends FinancialProjectionPort {
               WHERE fs.tenant_id=ft.tenant_id AND fs.title_id=ft.id
            ) st ON true
            LEFT JOIN LATERAL (
+             SELECT COALESCE(sum(p.amount) FILTER (WHERE p.reversed_at IS NULL),0)::numeric(20,2) AS paid_amount
+               FROM app.financial_payments p
+              WHERE p.tenant_id=ft.tenant_id AND p.title_id=ft.id
+           ) fp ON true
+           LEFT JOIN LATERAL (
              SELECT COALESCE(sum(fta.amount),0)::numeric(20,2) AS adjusted_amount
                FROM app.financial_title_adjustments fta
               WHERE fta.tenant_id=ft.tenant_id AND fta.title_id=ft.id
@@ -104,17 +127,33 @@ export class FinanceService extends FinancialProjectionPort {
            FROM app.financial_settlements fs
            JOIN app.financial_titles ft ON (ft.tenant_id,ft.id)=(fs.tenant_id,fs.title_id)
           WHERE fs.tenant_id=$1 ORDER BY fs.received_at DESC,fs.id DESC`, [tenantId]);
+      const payments = await client.query<PaymentRow>(
+        `SELECT p.id,p.title_id,p.fiscal_obligation_id,ft.title_number,
+                fa.legal_name AS authority_name,p.amount::text,p.paid_at,
+                p.bank_reference,p.notes,p.reversed_at,p.reversal_reason
+           FROM app.financial_payments p
+           JOIN app.financial_titles ft
+             ON (ft.tenant_id,ft.id)=(p.tenant_id,p.title_id)
+           JOIN app.fiscal_obligations fo
+             ON (fo.tenant_id,fo.id)=(p.tenant_id,p.fiscal_obligation_id)
+           JOIN app.fiscal_authorities fa
+             ON (fa.tenant_id,fa.id)=(fo.tenant_id,fo.authority_id)
+          WHERE p.tenant_id=$1 ORDER BY p.paid_at DESC,p.id DESC`, [tenantId]);
 
       const projected = events.rows.filter((row) => row.direction === 'INFLOW').reduce((sum, row) =>
         sum.plus(row.calculated_amount ?? 0), new Decimal(0));
+      const realized = (row: FinancialEventRow) => row.direction === 'INFLOW'
+        ? row.settled_amount : row.paid_amount;
       const outstanding = (row: FinancialEventRow) => row.title_amount
-        ? Decimal.max(new Decimal(row.title_amount).minus(row.adjusted_amount).minus(row.settled_amount), 0)
+        ? Decimal.max(new Decimal(row.title_amount).minus(row.adjusted_amount).minus(realized(row)), 0)
         : new Decimal(0);
       const receivable = events.rows.filter((row) => row.direction === 'INFLOW')
         .reduce((sum, row) => sum.plus(outstanding(row)), new Decimal(0));
       const payable = events.rows.filter((row) => row.direction === 'OUTFLOW')
         .reduce((sum, row) => sum.plus(outstanding(row)), new Decimal(0));
       const received = settlements.rows.filter((row) => !row.reversed_at)
+        .reduce((sum, row) => sum.plus(row.amount), new Decimal(0));
+      const paid = payments.rows.filter((row) => !row.reversed_at)
         .reduce((sum, row) => sum.plus(row.amount), new Decimal(0));
 
       return {
@@ -127,6 +166,8 @@ export class FinanceService extends FinancialProjectionPort {
           projectedAmount: projected.toFixed(2),
           receivableAmount: receivable.toFixed(2),
           receivedAmount: received.toFixed(2),
+          paidAmount: paid.toFixed(2),
+          netCashFlowAmount: received.minus(paid).toFixed(2),
           payableAmount: payable.toFixed(2),
           pendingForecastCount: events.rows.filter(
             (row) => !row.title_id && row.calculation_status === 'READY').length,
@@ -164,7 +205,7 @@ export class FinanceService extends FinancialProjectionPort {
             dueDate: row.due_date!,
             amount: row.title_amount!,
             status: row.title_status!,
-            settledAmount: row.settled_amount,
+            settledAmount: realized(row),
             adjustedAmount: row.adjusted_amount,
             outstandingAmount: outstanding(row).toFixed(2),
           } : null,
@@ -175,6 +216,19 @@ export class FinanceService extends FinancialProjectionPort {
           titleNumber: row.title_number,
           amount: row.amount,
           receivedAt: row.received_at.toISOString(),
+          bankReference: row.bank_reference,
+          notes: row.notes,
+          reversedAt: row.reversed_at?.toISOString() ?? null,
+          reversalReason: row.reversal_reason,
+        })),
+        payments: payments.rows.map((row) => ({
+          id: row.id,
+          titleId: row.title_id,
+          fiscalObligationId: row.fiscal_obligation_id,
+          titleNumber: row.title_number,
+          authorityName: row.authority_name,
+          amount: row.amount,
+          paidAt: row.paid_at.toISOString(),
           bankReference: row.bank_reference,
           notes: row.notes,
           reversedAt: row.reversed_at?.toISOString() ?? null,
@@ -295,6 +349,102 @@ export class FinanceService extends FinancialProjectionPort {
       await this.record(client, tenantId, actorId, 'finance.receipt_reversed', 'financial_settlement',
         settlementId, { titleId, reason: input.reason });
       return { id: settlementId, titleId, status, reversed: true };
+    });
+  }
+
+  pay(tenantId: string, actorId: string, titleId: string, input: PayTitleInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'FINANCE_EDIT');
+      const title = await client.query<{
+        amount: string; direction: string; event_type: string; fiscal_obligation_id: string | null;
+      }>(
+        `SELECT ft.amount::text,fe.direction,fe.event_type,fe.fiscal_obligation_id
+           FROM app.financial_titles ft
+           JOIN app.financial_events fe
+             ON (fe.tenant_id,fe.id)=(ft.tenant_id,ft.financial_event_id)
+          WHERE ft.tenant_id=$1 AND ft.id=$2 FOR UPDATE OF ft`,
+        [tenantId, titleId]);
+      if (!title.rows[0]) throw new NotFoundException({ code: 'FINANCIAL_TITLE_NOT_FOUND' });
+      if (title.rows[0].direction !== 'OUTFLOW') {
+        throw new ConflictException({ code: 'RECEIVABLE_PAYMENT_FLOW_NOT_AVAILABLE' });
+      }
+      if (title.rows[0].event_type !== 'TAX_OBLIGATION_PAYABLE'
+        || !title.rows[0].fiscal_obligation_id) {
+        throw new ConflictException({ code: 'FISCAL_PAYABLE_REQUIRED' });
+      }
+      const paidResult = await client.query<{ paid: string }>(
+        `SELECT COALESCE(sum(amount) FILTER (WHERE reversed_at IS NULL),0)::text AS paid
+           FROM app.financial_payments WHERE tenant_id=$1 AND title_id=$2`, [tenantId, titleId]);
+      const amount = new Decimal(input.amount);
+      const remaining = new Decimal(title.rows[0].amount).minus(paidResult.rows[0]!.paid);
+      if (amount.greaterThan(remaining)) {
+        throw new UnprocessableEntityException({
+          code: 'PAYMENT_EXCEEDS_TITLE_BALANCE', outstandingAmount: remaining.toFixed(2),
+        });
+      }
+      const id = randomUUID();
+      try {
+        await client.query(
+          `INSERT INTO app.financial_payments
+            (tenant_id,id,title_id,fiscal_obligation_id,amount,paid_at,bank_reference,notes,created_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+          [tenantId, id, titleId, title.rows[0].fiscal_obligation_id, amount.toFixed(2),
+            input.paidAt, input.bankReference, input.notes, actorId]);
+      } catch (error) {
+        if (isUniqueViolation(error)) {
+          throw new ConflictException({ code: 'PAYMENT_BANK_REFERENCE_ALREADY_USED' });
+        }
+        throw error;
+      }
+      const outstanding = remaining.minus(amount);
+      const status = outstanding.isZero() ? 'SETTLED' : 'PARTIALLY_SETTLED';
+      await client.query('UPDATE app.financial_titles SET status=$3 WHERE tenant_id=$1 AND id=$2',
+        [tenantId, titleId, status]);
+      await client.query('UPDATE app.fiscal_obligations SET status=$3 WHERE tenant_id=$1 AND id=$2',
+        [tenantId, title.rows[0].fiscal_obligation_id, status]);
+      await this.record(client, tenantId, actorId, 'finance.payment_recorded', 'financial_payment', id,
+        { titleId, fiscalObligationId: title.rows[0].fiscal_obligation_id,
+          ...input, amount: amount.toFixed(2) });
+      return { id, titleId, fiscalObligationId: title.rows[0].fiscal_obligation_id,
+        amount: amount.toFixed(2), outstandingAmount: outstanding.toFixed(2), status };
+    });
+  }
+
+  reversePayment(tenantId: string, actorId: string, paymentId: string,
+    input: ReverseSettlementInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'FINANCE_EDIT');
+      const payment = await client.query<{
+        title_id: string; fiscal_obligation_id: string; reversed_at: Date | null;
+      }>(
+        `SELECT title_id,fiscal_obligation_id,reversed_at FROM app.financial_payments
+          WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenantId, paymentId]);
+      if (!payment.rows[0]) throw new NotFoundException({ code: 'FINANCIAL_PAYMENT_NOT_FOUND' });
+      if (payment.rows[0].reversed_at) throw new ConflictException({ code: 'PAYMENT_ALREADY_REVERSED' });
+      const { title_id: titleId, fiscal_obligation_id: obligationId } = payment.rows[0];
+      await client.query('SELECT 1 FROM app.financial_titles WHERE tenant_id=$1 AND id=$2 FOR UPDATE',
+        [tenantId, titleId]);
+      await client.query(
+        `UPDATE app.financial_payments
+            SET reversed_at=now(),reversed_by=$3,reversal_reason=$4
+          WHERE tenant_id=$1 AND id=$2`, [tenantId, paymentId, actorId, input.reason]);
+      const balance = await client.query<{ amount: string; paid: string }>(
+        `SELECT ft.amount::text,
+                COALESCE(sum(p.amount) FILTER (WHERE p.reversed_at IS NULL),0)::text AS paid
+           FROM app.financial_titles ft
+           LEFT JOIN app.financial_payments p
+             ON (p.tenant_id,p.title_id)=(ft.tenant_id,ft.id)
+          WHERE ft.tenant_id=$1 AND ft.id=$2 GROUP BY ft.tenant_id,ft.id,ft.amount`, [tenantId, titleId]);
+      const paid = new Decimal(balance.rows[0]!.paid);
+      const status = paid.isZero()
+        ? 'OPEN' : paid.equals(balance.rows[0]!.amount) ? 'SETTLED' : 'PARTIALLY_SETTLED';
+      await client.query('UPDATE app.financial_titles SET status=$3 WHERE tenant_id=$1 AND id=$2',
+        [tenantId, titleId, status]);
+      await client.query('UPDATE app.fiscal_obligations SET status=$3 WHERE tenant_id=$1 AND id=$2',
+        [tenantId, obligationId, status]);
+      await this.record(client, tenantId, actorId, 'finance.payment_reversed', 'financial_payment',
+        paymentId, { titleId, fiscalObligationId: obligationId, reason: input.reason });
+      return { id: paymentId, titleId, fiscalObligationId: obligationId, status, reversed: true };
     });
   }
 
