@@ -17,7 +17,30 @@ describe('runtime environment', () => {
       NODE_ENV: 'production',
       AUTH_MODE: 'supabase',
       PORT: 3001,
+      DATABASE_POOL_MAX: 5,
+      DATABASE_IDLE_TIMEOUT_MS: 30_000,
+      DATABASE_CONNECTION_TIMEOUT_MS: 10_000,
     });
+  });
+
+  it('accepts bounded database pool settings', () => {
+    expect(parseApiEnvironment({
+      ...productionEnvironment,
+      DATABASE_POOL_MAX: '3',
+      DATABASE_IDLE_TIMEOUT_MS: '15000',
+      DATABASE_CONNECTION_TIMEOUT_MS: '5000',
+    })).toMatchObject({
+      DATABASE_POOL_MAX: 3,
+      DATABASE_IDLE_TIMEOUT_MS: 15_000,
+      DATABASE_CONNECTION_TIMEOUT_MS: 5_000,
+    });
+  });
+
+  it('rejects unsafe database pool settings', () => {
+    expect(() => parseApiEnvironment({
+      ...productionEnvironment,
+      DATABASE_POOL_MAX: '100',
+    })).toThrow();
   });
 
   it('rejects development auth and loopback URLs in production', () => {

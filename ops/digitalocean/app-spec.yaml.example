@@ -1,0 +1,139 @@
+alerts:
+  - rule: DEPLOYMENT_FAILED
+  - rule: DOMAIN_FAILED
+name: tier-trade-back
+region: nyc
+envs:
+  - key: NODE_ENV
+    scope: RUN_TIME
+    type: GENERAL
+    value: production
+  - key: AUTH_MODE
+    scope: RUN_TIME
+    type: GENERAL
+    value: supabase
+  - key: DATABASE_URL
+    scope: RUN_TIME
+    type: SECRET
+    value: SET_VIA_MCP_DATABASE_URL
+  - key: SUPABASE_URL
+    scope: RUN_TIME
+    type: GENERAL
+    value: SET_VIA_MCP_SUPABASE_URL
+  - key: SUPABASE_SECRET_KEY
+    scope: RUN_TIME
+    type: SECRET
+    value: SET_VIA_MCP_SUPABASE_SECRET_KEY
+  - key: WEB_ORIGIN
+    scope: RUN_TIME
+    type: GENERAL
+    value: SET_VIA_MCP_WEB_ORIGIN
+  - key: WEB_URL
+    scope: RUN_TIME
+    type: GENERAL
+    value: SET_VIA_MCP_WEB_URL
+services:
+  - name: api
+    github:
+      repo: gabrielhcamacho/tier-trade-back
+      branch: main
+      deploy_on_push: true
+    dockerfile_path: Dockerfile
+    source_dir: /
+    http_port: 3001
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    health_check:
+      http_path: /health/ready
+      initial_delay_seconds: 20
+      period_seconds: 10
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 6
+    liveness_health_check:
+      http_path: /health/live
+      initial_delay_seconds: 30
+      period_seconds: 10
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 3
+    envs:
+      - key: TIER_TRADE_PROCESS
+        scope: RUN_TIME
+        type: GENERAL
+        value: api
+      - key: DATABASE_POOL_MAX
+        scope: RUN_TIME
+        type: GENERAL
+        value: "5"
+      - key: DATABASE_IDLE_TIMEOUT_MS
+        scope: RUN_TIME
+        type: GENERAL
+        value: "30000"
+      - key: DATABASE_CONNECTION_TIMEOUT_MS
+        scope: RUN_TIME
+        type: GENERAL
+        value: "10000"
+      - key: OTEL_SERVICE_NAME
+        scope: RUN_TIME
+        type: GENERAL
+        value: tier-trade-api
+workers:
+  - name: outbox-worker
+    github:
+      repo: gabrielhcamacho/tier-trade-back
+      branch: main
+      deploy_on_push: true
+    dockerfile_path: Dockerfile
+    source_dir: /
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    liveness_health_check:
+      http_path: /health/live
+      port: 9464
+      initial_delay_seconds: 30
+      period_seconds: 10
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 3
+    envs:
+      - key: TIER_TRADE_PROCESS
+        scope: RUN_TIME
+        type: GENERAL
+        value: worker
+      - key: TENANT_ID
+        scope: RUN_TIME
+        type: GENERAL
+        value: e16ae5f4-5d64-4a84-a52f-32b569a212c0
+      - key: DATABASE_POOL_MAX
+        scope: RUN_TIME
+        type: GENERAL
+        value: "3"
+      - key: DATABASE_IDLE_TIMEOUT_MS
+        scope: RUN_TIME
+        type: GENERAL
+        value: "30000"
+      - key: DATABASE_CONNECTION_TIMEOUT_MS
+        scope: RUN_TIME
+        type: GENERAL
+        value: "10000"
+      - key: OUTBOX_POLL_INTERVAL_MS
+        scope: RUN_TIME
+        type: GENERAL
+        value: "1000"
+      - key: OUTBOX_BATCH_SIZE
+        scope: RUN_TIME
+        type: GENERAL
+        value: "25"
+      - key: OUTBOX_OBSERVABILITY_PORT
+        scope: RUN_TIME
+        type: GENERAL
+        value: "9464"
+      - key: OUTBOX_HEALTH_STALE_AFTER_MS
+        scope: RUN_TIME
+        type: GENERAL
+        value: "30000"
+      - key: OTEL_SERVICE_NAME
+        scope: RUN_TIME
+        type: GENERAL
+        value: tier-trade-outbox-worker

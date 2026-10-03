@@ -27,6 +27,7 @@ COPY --from=production-dependencies --chown=tiertrade:tiertrade /app/node_module
 COPY --from=build --chown=tiertrade:tiertrade /app/dist ./dist
 COPY --chown=tiertrade:tiertrade package.json ./package.json
 COPY --chown=tiertrade:tiertrade docker-entrypoint.sh ./docker-entrypoint.sh
+COPY --chown=root:root certs/supabase-root-2021.crt /etc/ssl/certs/supabase-root-2021.crt
 RUN chmod 755 ./docker-entrypoint.sh
 USER tiertrade
 EXPOSE 3001 9464
