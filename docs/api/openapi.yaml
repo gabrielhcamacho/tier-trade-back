@@ -253,7 +253,62 @@ paths:
     get:
       summary: Retorna documentos fiscais, cadeia operacional e pendências do tenant
       responses:
-        '200': { description: Workspace fiscal com cálculo tributário explicitamente bloqueado quando não configurado }
+        '200': { description: Workspace fiscal com documentos, estabelecimentos, versões e estado explícito do cálculo }
+  /v1/fiscal/establishments:
+    post:
+      summary: Cadastra estabelecimento fiscal do tenant
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/FiscalEstablishmentInput' } } }
+      responses:
+        '201': { description: Estabelecimento cadastrado }
+        '409': { description: CNPJ já cadastrado no tenant }
+  /v1/fiscal/establishments/{establishmentId}:
+    patch:
+      summary: Atualiza cadastro e regime de estabelecimento fiscal
+      parameters:
+        - { name: establishmentId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/FiscalEstablishmentInput' } } }
+      responses:
+        '200': { description: Estabelecimento atualizado }
+  /v1/fiscal/configurations:
+    post:
+      summary: Cria a primeira versão em rascunho de uma configuração fiscal
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/FiscalConfigurationInput' } } }
+      responses:
+        '201': { description: Versão 1 criada como rascunho }
+  /v1/fiscal/configurations/{configurationId}:
+    patch:
+      summary: Atualiza uma configuração fiscal ainda em rascunho
+      parameters:
+        - { name: configurationId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/FiscalConfigurationInput' } } }
+      responses:
+        '200': { description: Rascunho atualizado }
+        '409': { description: Versão ativa ou encerrada é imutável }
+  /v1/fiscal/configurations/{configurationId}/activate:
+    post:
+      summary: Ativa versão fiscal completa e encerra a anterior da mesma chave
+      parameters:
+        - { name: configurationId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '201': { description: Versão ativada }
+        '409': { description: Vigência sobreposta ou versão imutável }
+        '422': { description: Configuração incompleta }
+  /v1/fiscal/configurations/{configurationId}/new-version:
+    post:
+      summary: Clona versão ativa ou encerrada como novo rascunho
+      parameters:
+        - { name: configurationId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '201': { description: Próxima versão criada como rascunho }
+        '409': { description: Já existe um rascunho sucessor }
   /v1/fiscal/documents:
     post:
       summary: Registra NF-e de saída vinculada a um evento financeiro de expedição
@@ -455,3 +510,40 @@ components:
         issuedAt: { type: string, format: date-time }
         totalAmount: { type: string, pattern: '^\d+(?:\.\d{1,2})?$' }
         validationNotes: { type: [string, 'null'], minLength: 3, maxLength: 1000 }
+    FiscalEstablishmentInput:
+      type: object
+      additionalProperties: false
+      required: [legalName, taxId, stateRegistration, uf, taxRegime]
+      properties:
+        legalName: { type: string, minLength: 3, maxLength: 180 }
+        taxId: { type: string, pattern: '^\d{14}$' }
+        stateRegistration: { type: [string, 'null'], minLength: 2, maxLength: 30 }
+        uf: { type: string, pattern: '^[A-Z]{2}$' }
+        taxRegime: { type: [string, 'null'], enum: [SIMPLES_NACIONAL, LUCRO_PRESUMIDO, LUCRO_REAL, null] }
+    FiscalConfigurationInput:
+      type: object
+      additionalProperties: false
+      required: [establishmentId, name, commodity, destinationUf, cfop, emissionStrategy, technicalResponsible, effectiveFrom, effectiveTo, taxComponents]
+      properties:
+        establishmentId: { type: [string, 'null'], format: uuid }
+        name: { type: string, minLength: 3, maxLength: 120 }
+        commodity: { type: [string, 'null'], minLength: 2, maxLength: 40 }
+        destinationUf: { type: [string, 'null'], pattern: '^[A-Z]{2}$' }
+        cfop: { type: [string, 'null'], pattern: '^\d{4}$' }
+        emissionStrategy: { type: [string, 'null'], enum: [NATIVE, INTEGRATED, null] }
+        technicalResponsible: { type: [string, 'null'], minLength: 3, maxLength: 160 }
+        effectiveFrom: { type: [string, 'null'], format: date }
+        effectiveTo: { type: [string, 'null'], format: date }
+        taxComponents:
+          type: array
+          maxItems: 4
+          items: { $ref: '#/components/schemas/FiscalTaxComponent' }
+    FiscalTaxComponent:
+      type: object
+      additionalProperties: false
+      required: [tax, treatment, ratePct, retained]
+      properties:
+        tax: { type: string, enum: [ICMS, PIS, COFINS, FUNRURAL] }
+        treatment: { type: string, enum: [TAXED, EXEMPT, NON_TAXED, DEFERRED, SUSPENDED] }
+        ratePct: { type: [string, 'null'], pattern: '^\d+(?:\.\d{1,6})?$' }
+        retained: { type: boolean }

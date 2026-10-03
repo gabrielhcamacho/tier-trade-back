@@ -10,7 +10,7 @@
 
 ## Limite deliberado
 
-Não há cálculo fiscal nesta fatia. O backend retorna `BLOCKED_CONFIGURATION` para tributos porque faltam UFs, estabelecimentos, regimes, CFOPs, incidências, especialista responsável e decisão sobre emissão nativa ou integrada.
+Não há cálculo fiscal nesta fatia. O backend retorna `BLOCKED_CONFIGURATION` enquanto não houver uma configuração fiscal ativa e `BLOCKED_ENGINE` depois da ativação, até que o motor tributário e sua memória de cálculo sejam implementados.
 
 ## Garantias
 
@@ -19,4 +19,4 @@ Não há cálculo fiscal nesta fatia. O backend retorna `BLOCKED_CONFIGURATION` 
 - RLS é habilitada e forçada na tabela fiscal;
 - capability `FISCAL_EDIT` protege criação, correção, validação e rejeição;
 - auditoria e outbox são atômicas com a mudança;
-- o reset demo v7 restaura uma NF-e fictícia editável em conferência.
+- o reset demo v8 restaura uma NF-e fictícia editável, um estabelecimento e um rascunho fiscal sem alíquotas inventadas.

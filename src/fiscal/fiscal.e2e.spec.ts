@@ -33,6 +33,7 @@ describe.runIf(Boolean(databaseUrl))('fiscal document registry', () => {
       '20261002220831_financial_receivables_slice.sql', '20261002224025_risk_position_slice.sql',
       '20261002224945_cover_operational_foreign_keys.sql', '20261002234414_fiscal_document_registry.sql',
       '20261003000202_cover_fiscal_source_foreign_key.sql',
+      '20261003003904_fiscal_configuration_catalog.sql',
     ]) {
       await setup.query(await readFile(new URL(`../../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
     }
@@ -52,20 +53,81 @@ describe.runIf(Boolean(databaseUrl))('fiscal document registry', () => {
 
   afterAll(async () => app?.close());
 
-  it('loads the persisted demo document and keeps tax calculation blocked', async () => {
+  it('loads the persisted demo document and draft fiscal configuration', async () => {
     const response = await app.getHttpAdapter().getInstance().inject({
       method: 'GET', url: '/v1/fiscal', headers,
     });
     expect(response.statusCode, response.body).toBe(200);
     expect(response.json()).toMatchObject({
-      tenant: { isDemo: true, demoSeedVersion: 7 },
+      tenant: { isDemo: true, demoSeedVersion: 8 },
       summary: { received: 1, validated: 0, rejected: 0, linkedTitles: 0 },
       documents: [{
         id: documentId, contractReference: 'CV-2026-0042', documentNumber: 'NFE-DEMO-0001',
         totalAmount: '11360.00', expectedAmount: '11360.00', differenceAmount: '0.00', status: 'RECEIVED',
       }],
-      taxCalculation: { status: 'BLOCKED_CONFIGURATION' },
+      establishments: [{ uf: 'GO', taxRegime: null }],
+      configurations: [{ version: 1, status: 'DRAFT', cfop: null, taxComponents: [] }],
+      taxCalculation: { status: 'BLOCKED_CONFIGURATION', activeConfigurationCount: 0 },
     });
+  });
+
+  it('activates only an explicit complete version and then creates a new draft version', async () => {
+    const server = app.getHttpAdapter().getInstance();
+    const updatedDemoEstablishment = await server.inject({
+      method: 'PATCH', url: '/v1/fiscal/establishments/e5000000-0000-4000-8000-000000000001', headers,
+      payload: {
+        legalName: 'Cerrado Trading — Estabelecimento fictício', taxId: '99000000000199',
+        stateRegistration: 'ISENTO', uf: 'GO', taxRegime: 'LUCRO_REAL',
+      },
+    });
+    expect(updatedDemoEstablishment.statusCode, updatedDemoEstablishment.body).toBe(200);
+    const establishment = await server.inject({
+      method: 'POST', url: '/v1/fiscal/establishments', headers,
+      payload: {
+        legalName: 'Estabelecimento fiscal de teste', taxId: '99000000000991',
+        stateRegistration: 'ISENTO', uf: 'GO', taxRegime: 'LUCRO_REAL',
+      },
+    });
+    expect(establishment.statusCode, establishment.body).toBe(201);
+    const establishmentId = establishment.json().id as string;
+
+    const configuration = await server.inject({
+      method: 'POST', url: '/v1/fiscal/configurations', headers,
+      payload: {
+        establishmentId, name: 'Regra homologada no teste', commodity: 'MILHO', destinationUf: 'SP',
+        cfop: '6102', emissionStrategy: 'INTEGRATED', technicalResponsible: 'Responsável de teste',
+        effectiveFrom: '2026-10-01', effectiveTo: null,
+        taxComponents: [
+          { tax: 'ICMS', treatment: 'TAXED', ratePct: '7.000000', retained: false },
+          { tax: 'PIS', treatment: 'SUSPENDED', ratePct: null, retained: false },
+        ],
+      },
+    });
+    expect(configuration.statusCode, configuration.body).toBe(201);
+    const configurationId = configuration.json().id as string;
+
+    const activated = await server.inject({
+      method: 'POST', url: `/v1/fiscal/configurations/${configurationId}/activate`, headers,
+    });
+    expect(activated.statusCode, activated.body).toBe(201);
+    expect(activated.json()).toMatchObject({ status: 'ACTIVE' });
+
+    const workspace = await server.inject({ method: 'GET', url: '/v1/fiscal', headers });
+    const body = workspace.json();
+    expect(body).toMatchObject({
+      taxCalculation: { status: 'BLOCKED_ENGINE', activeConfigurationCount: 1 },
+    });
+    expect(body.configurations.find((item: { id: string }) => item.id === configurationId)).toMatchObject({
+      id: configurationId, status: 'ACTIVE', version: 1, cfop: '6102',
+      taxComponents: [{ tax: 'ICMS', treatment: 'TAXED', ratePct: '7.000000', retained: false },
+        { tax: 'PIS', treatment: 'SUSPENDED', ratePct: null, retained: false }],
+    });
+
+    const version = await server.inject({
+      method: 'POST', url: `/v1/fiscal/configurations/${configurationId}/new-version`, headers,
+    });
+    expect(version.statusCode, version.body).toBe(201);
+    expect(version.json()).toMatchObject({ version: 2, status: 'DRAFT' });
   });
 
   it('prevents a divergent value, accepts a correction and links the title on validation', async () => {

@@ -3,8 +3,11 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Identity, type RequestIdentity, RequestIdentityGuard } from '../auth/request-identity.guard.js';
 import { SchemaPipe } from '../common/schema.pipe.js';
 import {
-  createFiscalDocumentSchema, rejectFiscalDocumentSchema, updateFiscalDocumentSchema,
-  type CreateFiscalDocumentInput, type RejectFiscalDocumentInput, type UpdateFiscalDocumentInput,
+  createFiscalConfigurationSchema, createFiscalDocumentSchema, createFiscalEstablishmentSchema,
+  rejectFiscalDocumentSchema, updateFiscalConfigurationSchema, updateFiscalDocumentSchema,
+  type CreateFiscalConfigurationInput, type CreateFiscalDocumentInput,
+  type CreateFiscalEstablishmentInput, type RejectFiscalDocumentInput,
+  type UpdateFiscalConfigurationInput, type UpdateFiscalDocumentInput,
 } from './fiscal.schemas.js';
 import { FiscalService } from './fiscal.service.js';
 
@@ -18,6 +21,44 @@ export class FiscalController {
   @Get()
   workspace(@Identity() identity: RequestIdentity) {
     return this.service.workspace(identity.tenantId, identity.actorId);
+  }
+
+  @Post('establishments')
+  createEstablishment(@Identity() identity: RequestIdentity,
+    @Body(new SchemaPipe(createFiscalEstablishmentSchema)) input: CreateFiscalEstablishmentInput) {
+    return this.service.createEstablishment(identity.tenantId, identity.actorId, input);
+  }
+
+  @Patch('establishments/:establishmentId')
+  updateEstablishment(@Identity() identity: RequestIdentity,
+    @Param('establishmentId', ParseUUIDPipe) establishmentId: string,
+    @Body(new SchemaPipe(createFiscalEstablishmentSchema)) input: CreateFiscalEstablishmentInput) {
+    return this.service.updateEstablishment(identity.tenantId, identity.actorId, establishmentId, input);
+  }
+
+  @Post('configurations')
+  createConfiguration(@Identity() identity: RequestIdentity,
+    @Body(new SchemaPipe(createFiscalConfigurationSchema)) input: CreateFiscalConfigurationInput) {
+    return this.service.createConfiguration(identity.tenantId, identity.actorId, input);
+  }
+
+  @Patch('configurations/:configurationId')
+  updateConfiguration(@Identity() identity: RequestIdentity,
+    @Param('configurationId', ParseUUIDPipe) configurationId: string,
+    @Body(new SchemaPipe(updateFiscalConfigurationSchema)) input: UpdateFiscalConfigurationInput) {
+    return this.service.updateConfiguration(identity.tenantId, identity.actorId, configurationId, input);
+  }
+
+  @Post('configurations/:configurationId/activate')
+  activateConfiguration(@Identity() identity: RequestIdentity,
+    @Param('configurationId', ParseUUIDPipe) configurationId: string) {
+    return this.service.activateConfiguration(identity.tenantId, identity.actorId, configurationId);
+  }
+
+  @Post('configurations/:configurationId/new-version')
+  newConfigurationVersion(@Identity() identity: RequestIdentity,
+    @Param('configurationId', ParseUUIDPipe) configurationId: string) {
+    return this.service.newConfigurationVersion(identity.tenantId, identity.actorId, configurationId);
   }
 
   @Post('documents')

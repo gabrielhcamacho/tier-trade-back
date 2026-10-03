@@ -34,6 +34,7 @@ describe.runIf(Boolean(databaseUrl))('financial receivables', () => {
       '20261002224945_cover_operational_foreign_keys.sql',
       '20261002234414_fiscal_document_registry.sql',
       '20261003000202_cover_fiscal_source_foreign_key.sql',
+      '20261003003904_fiscal_configuration_catalog.sql',
     ];
     for (const migration of migrations) {
       await setup.query(await readFile(new URL(`../../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
@@ -60,7 +61,7 @@ describe.runIf(Boolean(databaseUrl))('financial receivables', () => {
     });
     expect(response.statusCode, response.body).toBe(200);
     expect(response.json()).toMatchObject({
-      tenant: { isDemo: true, demoSeedVersion: 7 },
+      tenant: { isDemo: true, demoSeedVersion: 8 },
       summary: {
         projectedAmount: '11360.00', receivableAmount: '7360.00', receivedAmount: '4000.00',
         pendingForecastCount: 0, pendingRoundingCount: 0,

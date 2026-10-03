@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 
-export const DEMO_SEED_VERSION = 7;
+export const DEMO_SEED_VERSION = 8;
 
 export type ResetDemoTenantInput = {
   tenantId: string;
@@ -25,6 +25,8 @@ export type ResetDemoTenantResult = {
   financialTitles: number;
   financialSettlements: number;
   fiscalDocuments: number;
+  fiscalEstablishments: number;
+  fiscalConfigurations: number;
   riskPolicies: number;
 };
 
@@ -90,6 +92,8 @@ const ids = {
     settlement: 'e2000000-0000-4000-8000-000000000001',
   },
   fiscalDocument: 'e4000000-0000-4000-8000-000000000001',
+  fiscalEstablishment: 'e5000000-0000-4000-8000-000000000001',
+  fiscalConfiguration: 'e6000000-0000-4000-8000-000000000001',
   riskPolicy: 'e3000000-0000-4000-8000-000000000001',
 } as const;
 
@@ -159,6 +163,8 @@ export async function resetDemoTenant(
       financialTitles: 1,
       financialSettlements: 1,
       fiscalDocuments: 1,
+      fiscalEstablishments: 1,
+      fiscalConfigurations: 1,
       riskPolicies: 1,
     };
   } catch (error) {
@@ -171,6 +177,7 @@ export async function resetDemoTenant(
 
 async function clearOperationalData(client: PoolClient, tenantId: string, actorId: string): Promise<void> {
   await client.query('SELECT app.delete_demo_risk($1,$2)', [tenantId, actorId]);
+  await client.query('SELECT app.delete_demo_fiscal_configuration($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_fiscal($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_finance($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_sales_fulfillment($1,$2)', [tenantId, actorId]);
@@ -370,6 +377,23 @@ async function seedOperationalData(client: PoolClient, input: ResetDemoTenantInp
        '2026-10-01T16:15:00Z','2026-10-01T16:15:00Z')`,
     [tenantId, ids.fiscalDocument, ids.fulfillment.dispatch, ids.fulfillment.salesContract,
       ids.finance.event, actorId],
+  );
+  await client.query(
+    `INSERT INTO app.fiscal_establishments
+      (tenant_id,id,legal_name,tax_id,state_registration,uf,tax_regime,created_by,updated_by,created_at,updated_at)
+     VALUES ($1,$2,'Cerrado Trading — Estabelecimento fictício','99000000000199',NULL,'GO',NULL,$3,$3,
+       '2026-10-01T12:00:00Z','2026-10-01T12:00:00Z')`,
+    [tenantId, ids.fiscalEstablishment, actorId],
+  );
+  await client.query(
+    `INSERT INTO app.fiscal_configuration_versions
+      (tenant_id,id,configuration_key,version,establishment_id,name,operation_type,commodity,
+       destination_uf,cfop,emission_strategy,technical_responsible,effective_from,effective_to,
+       tax_components,status,created_by,updated_by,created_at,updated_at)
+     VALUES ($1,$2,$2,1,$3,'Venda interestadual de milho — configuração pendente','SALE_DISPATCH','MILHO',
+       'SP',NULL,NULL,NULL,'2026-10-01',NULL,'[]'::jsonb,'DRAFT',$4,$4,
+       '2026-10-01T12:00:00Z','2026-10-01T12:00:00Z')`,
+    [tenantId, ids.fiscalConfiguration, ids.fiscalEstablishment, actorId],
   );
   await client.query(
     `INSERT INTO app.financial_titles

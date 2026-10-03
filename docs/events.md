@@ -26,6 +26,12 @@
 | `fiscal.document_corrected` | fiscal_document | dados do documento são corrigidos e voltam à conferência | validação fiscal, financeiro |
 | `fiscal.document_validated` | fiscal_document | chave e valor são conferidos e o título é vinculado | financeiro, reconciliação |
 | `fiscal.document_rejected` | fiscal_document | documento é rejeitado com motivo e seu vínculo financeiro é removido | correção fiscal, auditoria |
+| `fiscal.establishment_created` | fiscal_establishment | estabelecimento fiscal é cadastrado para o tenant | configuração fiscal |
+| `fiscal.establishment_updated` | fiscal_establishment | cadastro ou regime do estabelecimento é corrigido | configuração fiscal |
+| `fiscal.configuration_drafted` | fiscal_configuration | primeira versão é criada como rascunho | homologação fiscal |
+| `fiscal.configuration_updated` | fiscal_configuration | rascunho recebe parâmetros homologados | homologação fiscal |
+| `fiscal.configuration_activated` | fiscal_configuration | versão completa entra em vigência | futuro motor tributário |
+| `fiscal.configuration_version_created` | fiscal_configuration | sucessora é clonada sem reescrever a versão anterior | homologação fiscal |
 
 Todos carregam `id`, `tenant_id`, tipo, agregado, payload mínimo e instante. A outbox é gravada na mesma transação da mudança. Publicação é pelo menos uma vez; consumidores deduplicam por `id`.
 
@@ -40,6 +46,7 @@ Todos carregam `id`, `tenant_id`, tipo, agregado, payload mínimo e instante. A 
 - alocações alteram somente disponibilidade; expedições criam movimento `DISPATCH` negativo e atualizam o saldo executado da venda na mesma transação;
 - a mesma transação da expedição cria o evento financeiro canônico; título e baixa continuam fatos posteriores e separados;
 - validação fiscal compara o total da NF-e ao evento financeiro; não calcula tributos e liga o título apenas quando não há divergência;
+- configurações fiscais ativas são imutáveis, versionadas e ainda não produzem cálculo até a entrega do motor tributário;
 - `published_at` indica entrega aos consumidores internos atuais.
 - o worker expõe saúde em `/health/live` e `/health/ready` e métricas em `/metrics` na porta operacional própria;
 - falha, retentativa e recuperação geram logs JSON sem payload de negócio.
