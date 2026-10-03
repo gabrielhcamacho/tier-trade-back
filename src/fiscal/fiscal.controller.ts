@@ -3,9 +3,9 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Identity, type RequestIdentity, RequestIdentityGuard } from '../auth/request-identity.guard.js';
 import { SchemaPipe } from '../common/schema.pipe.js';
 import {
-  createFiscalConfigurationSchema, createFiscalDocumentSchema, createFiscalEstablishmentSchema,
+  createFiscalCalculationSchema, createFiscalConfigurationSchema, createFiscalDocumentSchema, createFiscalEstablishmentSchema,
   rejectFiscalDocumentSchema, updateFiscalConfigurationSchema, updateFiscalDocumentSchema,
-  type CreateFiscalConfigurationInput, type CreateFiscalDocumentInput,
+  type CreateFiscalCalculationInput, type CreateFiscalConfigurationInput, type CreateFiscalDocumentInput,
   type CreateFiscalEstablishmentInput, type RejectFiscalDocumentInput,
   type UpdateFiscalConfigurationInput, type UpdateFiscalDocumentInput,
 } from './fiscal.schemas.js';
@@ -59,6 +59,12 @@ export class FiscalController {
   newConfigurationVersion(@Identity() identity: RequestIdentity,
     @Param('configurationId', ParseUUIDPipe) configurationId: string) {
     return this.service.newConfigurationVersion(identity.tenantId, identity.actorId, configurationId);
+  }
+
+  @Post('calculations')
+  calculate(@Identity() identity: RequestIdentity,
+    @Body(new SchemaPipe(createFiscalCalculationSchema)) input: CreateFiscalCalculationInput) {
+    return this.service.calculate(identity.tenantId, identity.actorId, input);
   }
 
   @Post('documents')

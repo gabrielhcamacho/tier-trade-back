@@ -10,10 +10,14 @@ const uf = z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/, 'Informe uma UF c
 const nullableUf = z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/, 'Informe uma UF com duas letras.').nullable();
 const percentage = z.string().regex(/^\d+(?:\.\d{1,6})?$/, 'Informe um percentual decimal válido.')
   .refine((value) => Number(value) >= 0 && Number(value) <= 100, 'O percentual deve estar entre 0 e 100.');
+const calculationAmount = z.string()
+  .regex(/^(?:0|[1-9]\d{0,17})(?:\.\d{1,6})?$/, 'Informe um valor decimal positivo com até seis casas.')
+  .refine((value) => !/^0+(?:\.0+)?$/.test(value), 'O valor deve ser maior que zero.');
 
 export const taxComponentSchema = z.object({
   tax: z.enum(['ICMS', 'PIS', 'COFINS', 'FUNRURAL']),
   treatment: z.enum(['TAXED', 'EXEMPT', 'NON_TAXED', 'DEFERRED', 'SUSPENDED']),
+  basis: z.enum(['DOCUMENT_TOTAL']).nullable(),
   ratePct: percentage.nullable(),
   retained: z.boolean(),
 }).superRefine((component, context) => {
@@ -71,15 +75,40 @@ export const createFiscalConfigurationSchema = z.object({
   technicalResponsible: optionalText(3, 160),
   effectiveFrom: z.iso.date().nullable(),
   effectiveTo: z.iso.date().nullable(),
+  roundingMode: z.enum(['HALF_UP', 'HALF_EVEN', 'DOWN', 'UP']).nullable(),
+  roundingScale: z.number().int().min(0).max(6).nullable(),
   taxComponents,
 }).superRefine((configuration, context) => {
   if (configuration.effectiveFrom && configuration.effectiveTo
     && configuration.effectiveTo < configuration.effectiveFrom) {
     context.addIssue({ code: 'custom', path: ['effectiveTo'], message: 'O fim da vigência deve ser posterior ao início.' });
   }
+  if ((configuration.roundingMode === null) !== (configuration.roundingScale === null)) {
+    context.addIssue({ code: 'custom', path: ['roundingMode'], message: 'Modo e escala de arredondamento devem ser informados juntos.' });
+  }
 });
 
 export const updateFiscalConfigurationSchema = createFiscalConfigurationSchema;
+
+export const createFiscalCalculationSchema = z.object({
+  requestKey: z.uuid(),
+  establishmentId: z.uuid(),
+  operationType: z.literal('SALE_DISPATCH'),
+  commodity: z.string().trim().min(2).max(40).transform((value) => value.toUpperCase()),
+  destinationUf: uf,
+  occurredOn: z.iso.date(),
+  grossAmount: calculationAmount,
+  currency: z.literal('BRL'),
+  sourceType: z.enum(['MANUAL', 'FISCAL_DOCUMENT']),
+  sourceId: z.uuid().nullable(),
+}).superRefine((calculation, context) => {
+  if (calculation.sourceType === 'FISCAL_DOCUMENT' && calculation.sourceId === null) {
+    context.addIssue({ code: 'custom', path: ['sourceId'], message: 'Documento fiscal de origem obrigatório.' });
+  }
+  if (calculation.sourceType === 'MANUAL' && calculation.sourceId !== null) {
+    context.addIssue({ code: 'custom', path: ['sourceId'], message: 'Cálculo manual não aceita documento de origem.' });
+  }
+});
 
 export type CreateFiscalDocumentInput = z.infer<typeof createFiscalDocumentSchema>;
 export type UpdateFiscalDocumentInput = z.infer<typeof updateFiscalDocumentSchema>;
@@ -88,3 +117,4 @@ export type TaxComponentInput = z.infer<typeof taxComponentSchema>;
 export type CreateFiscalEstablishmentInput = z.infer<typeof createFiscalEstablishmentSchema>;
 export type CreateFiscalConfigurationInput = z.infer<typeof createFiscalConfigurationSchema>;
 export type UpdateFiscalConfigurationInput = z.infer<typeof updateFiscalConfigurationSchema>;
+export type CreateFiscalCalculationInput = z.infer<typeof createFiscalCalculationSchema>;

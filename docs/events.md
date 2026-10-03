@@ -30,8 +30,9 @@
 | `fiscal.establishment_updated` | fiscal_establishment | cadastro ou regime do estabelecimento é corrigido | configuração fiscal |
 | `fiscal.configuration_drafted` | fiscal_configuration | primeira versão é criada como rascunho | homologação fiscal |
 | `fiscal.configuration_updated` | fiscal_configuration | rascunho recebe parâmetros homologados | homologação fiscal |
-| `fiscal.configuration_activated` | fiscal_configuration | versão completa entra em vigência | futuro motor tributário |
+| `fiscal.configuration_activated` | fiscal_configuration | versão completa entra em vigência | motor tributário |
 | `fiscal.configuration_version_created` | fiscal_configuration | sucessora é clonada sem reescrever a versão anterior | homologação fiscal |
+| `fiscal.calculation_completed` | fiscal_calculation | contexto seleciona uma versão única e a memória é persistida | obrigações, financeiro, contabilidade |
 
 Todos carregam `id`, `tenant_id`, tipo, agregado, payload mínimo e instante. A outbox é gravada na mesma transação da mudança. Publicação é pelo menos uma vez; consumidores deduplicam por `id`.
 
@@ -46,7 +47,7 @@ Todos carregam `id`, `tenant_id`, tipo, agregado, payload mínimo e instante. A 
 - alocações alteram somente disponibilidade; expedições criam movimento `DISPATCH` negativo e atualizam o saldo executado da venda na mesma transação;
 - a mesma transação da expedição cria o evento financeiro canônico; título e baixa continuam fatos posteriores e separados;
 - validação fiscal compara o total da NF-e ao evento financeiro; não calcula tributos e liga o título apenas quando não há divergência;
-- configurações fiscais ativas são imutáveis, versionadas e ainda não produzem cálculo até a entrega do motor tributário;
+- configurações fiscais ativas são imutáveis e o motor registra entrada, versão, bases, alíquotas, valores não arredondados, arredondamento e resultado;
 - `published_at` indica entrega aos consumidores internos atuais.
 - o worker expõe saúde em `/health/live` e `/health/ready` e métricas em `/metrics` na porta operacional própria;
 - falha, retentativa e recuperação geram logs JSON sem payload de negócio.

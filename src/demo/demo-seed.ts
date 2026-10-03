@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 
-export const DEMO_SEED_VERSION = 8;
+export const DEMO_SEED_VERSION = 9;
 
 export type ResetDemoTenantInput = {
   tenantId: string;
@@ -27,6 +27,7 @@ export type ResetDemoTenantResult = {
   fiscalDocuments: number;
   fiscalEstablishments: number;
   fiscalConfigurations: number;
+  fiscalCalculations: number;
   riskPolicies: number;
 };
 
@@ -165,6 +166,7 @@ export async function resetDemoTenant(
       fiscalDocuments: 1,
       fiscalEstablishments: 1,
       fiscalConfigurations: 1,
+      fiscalCalculations: 0,
       riskPolicies: 1,
     };
   } catch (error) {

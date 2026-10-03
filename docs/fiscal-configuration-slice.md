@@ -2,7 +2,7 @@
 
 ## Resultado funcional
 
-O workspace fiscal permite cadastrar e editar estabelecimentos, criar configurações em rascunho, informar CFOP, vigência, estratégia de emissão, responsável técnico e tratamentos tributários, ativar uma versão completa e criar sua sucessora sem reescrever o histórico.
+O workspace fiscal permite cadastrar e editar estabelecimentos, criar configurações em rascunho, informar CFOP, vigência, estratégia de emissão, responsável técnico, base, tratamentos e política de arredondamento, ativar uma versão completa e criar sua sucessora sem reescrever o histórico.
 
 ## Regras preservadas
 
@@ -12,8 +12,8 @@ O workspace fiscal permite cadastrar e editar estabelecimentos, criar configura�
 - ativação incompleta ou com vigência sobreposta é rejeitada;
 - seed demonstrativo contém somente um rascunho incompleto, sem alíquotas inventadas;
 - auditoria e outbox são gravadas na mesma transação da alteração;
-- cálculo, obrigação tributária, retenção efetiva, emissão e contabilização continuam fora desta fatia.
+- o cálculo só aceita versões com base e arredondamento explícitos; obrigação tributária, efeito financeiro, emissão e contabilização continuam em fatias posteriores.
 
-## Próxima extensão
+## Extensão entregue
 
-O motor tributário deverá selecionar uma versão ativa pela data e pelo contexto da operação, calcular cada componente com Decimal, registrar base, alíquota, tratamento, arredondamento, versão e memória de cálculo, e falhar de forma explícita quando não houver correspondência única.
+O motor seleciona uma versão ativa pela data e pelo contexto da operação, calcula cada componente com Decimal, registra base, alíquota, tratamento, valor antes e depois do arredondamento, versão e memória completa, e falha explicitamente quando não há correspondência única.

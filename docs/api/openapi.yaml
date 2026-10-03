@@ -309,6 +309,16 @@ paths:
       responses:
         '201': { description: Próxima versão criada como rascunho }
         '409': { description: Já existe um rascunho sucessor }
+  /v1/fiscal/calculations:
+    post:
+      summary: Seleciona a configuração ativa e persiste uma memória fiscal determinística
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateFiscalCalculation' } } }
+      responses:
+        '201': { description: Cálculo criado ou repetição idempotente retornada }
+        '409': { description: Configuração ambígua, inválida ou chave idempotente divergente }
+        '422': { description: Nenhuma configuração aplicável ou retenção superior ao bruto }
   /v1/fiscal/documents:
     post:
       summary: Registra NF-e de saída vinculada a um evento financeiro de expedição
@@ -523,7 +533,7 @@ components:
     FiscalConfigurationInput:
       type: object
       additionalProperties: false
-      required: [establishmentId, name, commodity, destinationUf, cfop, emissionStrategy, technicalResponsible, effectiveFrom, effectiveTo, taxComponents]
+      required: [establishmentId, name, commodity, destinationUf, cfop, emissionStrategy, technicalResponsible, effectiveFrom, effectiveTo, roundingMode, roundingScale, taxComponents]
       properties:
         establishmentId: { type: [string, 'null'], format: uuid }
         name: { type: string, minLength: 3, maxLength: 120 }
@@ -534,6 +544,8 @@ components:
         technicalResponsible: { type: [string, 'null'], minLength: 3, maxLength: 160 }
         effectiveFrom: { type: [string, 'null'], format: date }
         effectiveTo: { type: [string, 'null'], format: date }
+        roundingMode: { type: [string, 'null'], enum: [HALF_UP, HALF_EVEN, DOWN, UP, null] }
+        roundingScale: { type: [integer, 'null'], minimum: 0, maximum: 6 }
         taxComponents:
           type: array
           maxItems: 4
@@ -541,9 +553,25 @@ components:
     FiscalTaxComponent:
       type: object
       additionalProperties: false
-      required: [tax, treatment, ratePct, retained]
+      required: [tax, treatment, basis, ratePct, retained]
       properties:
         tax: { type: string, enum: [ICMS, PIS, COFINS, FUNRURAL] }
         treatment: { type: string, enum: [TAXED, EXEMPT, NON_TAXED, DEFERRED, SUSPENDED] }
+        basis: { type: [string, 'null'], enum: [DOCUMENT_TOTAL, null] }
         ratePct: { type: [string, 'null'], pattern: '^\d+(?:\.\d{1,6})?$' }
         retained: { type: boolean }
+    CreateFiscalCalculation:
+      type: object
+      additionalProperties: false
+      required: [requestKey, establishmentId, operationType, commodity, destinationUf, occurredOn, grossAmount, currency, sourceType, sourceId]
+      properties:
+        requestKey: { type: string, format: uuid }
+        establishmentId: { type: string, format: uuid }
+        operationType: { const: SALE_DISPATCH }
+        commodity: { type: string, minLength: 2, maxLength: 40 }
+        destinationUf: { type: string, pattern: '^[A-Z]{2}$' }
+        occurredOn: { type: string, format: date }
+        grossAmount: { type: string, pattern: '^(?:0|[1-9]\d{0,17})(?:\.\d{1,6})?$' }
+        currency: { const: BRL }
+        sourceType: { type: string, enum: [MANUAL, FISCAL_DOCUMENT] }
+        sourceId: { type: [string, 'null'], format: uuid }

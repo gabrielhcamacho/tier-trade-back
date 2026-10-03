@@ -13,7 +13,7 @@
 - ferramenta de observabilidade e retenção dos sinais;
 - integração com Mountier Agro;
 - homologação do pacote fiscal do piloto no catálogo já implementado: estabelecimentos, regimes, CFOPs, incidências, responsável técnico e emissão nativa ou integrada;
-- regras contábeis, plano de contas, arredondamento monetário por tenant e descontos de qualidade;
+- regras contábeis, plano de contas e descontos de qualidade;
 - pacote inicial de risco de mercado: fonte, praça, instrumentos, periodicidade, curva, base, câmbio e responsabilidade de execução;
 - nome comercial definitivo do produto.
 
@@ -29,5 +29,6 @@
 - piloto e produção usarão projetos Supabase separados.
 - expedições de venda geram previsão financeira; títulos e baixas são registros separados, auditados e reversíveis.
 - posição física, contratual e financeira usa registros oficiais; limites de posição são configuráveis e versionados por tenant.
-- documentos fiscais podem ser recebidos, corrigidos, validados e rejeitados; cálculo tributário permanece bloqueado até homologação do pacote fiscal.
-- estabelecimentos e configurações fiscais podem ser cadastrados, editados, ativados e versionados; versões ativas são imutáveis e não calculam tributos antes do motor homologado.
+- documentos fiscais podem ser recebidos, corrigidos, validados e rejeitados; o cálculo tributário só ocorre com configuração ativa e homologada.
+- estabelecimentos e configurações fiscais podem ser cadastrados, editados, ativados e versionados; versões ativas são imutáveis e registram base e arredondamento explícitos.
+- o motor fiscal seleciona uma versão por contexto e vigência, usa Decimal, é idempotente e persiste memória imutável; gerar obrigações e efeitos financeiros permanece para a próxima fatia.

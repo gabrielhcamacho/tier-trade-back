@@ -4,9 +4,11 @@ import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { DatabasePlatformPort } from '../database/database.js';
 import type {
-  CreateFiscalConfigurationInput, CreateFiscalDocumentInput, CreateFiscalEstablishmentInput,
+  CreateFiscalCalculationInput, CreateFiscalConfigurationInput, CreateFiscalDocumentInput, CreateFiscalEstablishmentInput,
   RejectFiscalDocumentInput, UpdateFiscalConfigurationInput, UpdateFiscalDocumentInput,
 } from './fiscal.schemas.js';
+import { taxComponentSchema } from './fiscal.schemas.js';
+import { calculateFiscalMemory, type FiscalCalculationComponent } from './fiscal-calculation.js';
 
 type FiscalDocumentRow = {
   id: string; financial_event_id: string; source_id: string; sales_contract_id: string;
@@ -29,7 +31,17 @@ type FiscalConfigurationRow = {
   name: string; operation_type: string; commodity: string | null; destination_uf: string | null;
   cfop: string | null; emission_strategy: string | null; technical_responsible: string | null;
   effective_from: string | null; effective_to: string | null; tax_components: unknown;
+  rounding_mode: 'HALF_UP' | 'HALF_EVEN' | 'DOWN' | 'UP' | null; rounding_scale: number | null;
   status: string; updated_at: Date; activated_at: Date | null;
+};
+
+type FiscalCalculationRow = {
+  id: string; request_key: string; configuration_id: string; configuration_key: string;
+  configuration_version: number; configuration_name: string; establishment_id: string;
+  establishment_name: string; operation_type: string; commodity: string; destination_uf: string;
+  occurred_on: string; source_type: string; source_id: string | null; currency: string;
+  gross_amount: string; tax_total: string; retained_total: string; net_amount: string;
+  input_snapshot: unknown; result_snapshot: unknown; calculated_by: string; calculated_at: Date;
 };
 
 @Injectable()
@@ -90,11 +102,24 @@ export class FiscalService {
                 fe.active AS establishment_active,
                 fc.name,fc.operation_type,fc.commodity,fc.destination_uf,fc.cfop,
                 fc.emission_strategy,fc.technical_responsible,fc.effective_from::text,
-                fc.effective_to::text,fc.tax_components,fc.status,fc.updated_at,fc.activated_at
+                fc.effective_to::text,fc.rounding_mode,fc.rounding_scale,
+                fc.tax_components,fc.status,fc.updated_at,fc.activated_at
            FROM app.fiscal_configuration_versions fc
            LEFT JOIN app.fiscal_establishments fe
              ON (fe.tenant_id,fe.id)=(fc.tenant_id,fc.establishment_id)
           WHERE fc.tenant_id=$1 ORDER BY fc.configuration_key,fc.version DESC`, [tenantId]);
+      const calculations = await client.query<FiscalCalculationRow>(
+        `SELECT c.id,c.request_key,c.configuration_id,c.configuration_key,c.configuration_version,
+                fc.name AS configuration_name,c.establishment_id,fe.legal_name AS establishment_name,
+                c.operation_type,c.commodity,c.destination_uf,c.occurred_on::text,c.source_type,
+                c.source_id,c.currency,c.gross_amount::text,c.tax_total::text,c.retained_total::text,
+                c.net_amount::text,c.input_snapshot,c.result_snapshot,c.calculated_by,c.calculated_at
+           FROM app.fiscal_calculations c
+           JOIN app.fiscal_configuration_versions fc
+             ON (fc.tenant_id,fc.id)=(c.tenant_id,c.configuration_id)
+           JOIN app.fiscal_establishments fe
+             ON (fe.tenant_id,fe.id)=(c.tenant_id,c.establishment_id)
+          WHERE c.tenant_id=$1 ORDER BY c.calculated_at DESC,c.id DESC LIMIT 20`, [tenantId]);
       const mapped = documents.rows.map((row) => this.mapDocument(row));
       const mappedConfigurations = configurations.rows.map((row) => this.mapConfiguration(row));
       const activeConfigurations = mappedConfigurations.filter((configuration) => configuration.status === 'ACTIVE');
@@ -118,6 +143,7 @@ export class FiscalService {
           active: row.active, updatedAt: row.updated_at.toISOString(),
         })),
         configurations: mappedConfigurations,
+        calculations: calculations.rows.map((row) => this.mapCalculation(row)),
         eligibleEvents: eligible.rows.map((row) => ({
           id: row.id, sourceId: row.source_id, salesContractId: row.sales_contract_id,
           contractReference: row.contract_reference, counterpartyName: row.counterparty_name,
@@ -125,10 +151,10 @@ export class FiscalService {
           calculationStatus: row.calculation_status,
         })),
         taxCalculation: {
-          status: activeConfigurations.length ? 'BLOCKED_ENGINE' : 'BLOCKED_CONFIGURATION',
+          status: activeConfigurations.length ? 'READY' : 'BLOCKED_CONFIGURATION',
           activeConfigurationCount: activeConfigurations.length,
           blockers: activeConfigurations.length
-            ? ['Configuração fiscal ativa e versionada; o motor de cálculo tributário entra na próxima etapa.']
+            ? []
             : blockers,
         },
       };
@@ -192,11 +218,12 @@ export class FiscalService {
         `INSERT INTO app.fiscal_configuration_versions
           (tenant_id,id,configuration_key,version,establishment_id,name,commodity,destination_uf,
            cfop,emission_strategy,technical_responsible,effective_from,effective_to,tax_components,
-           created_by,updated_by)
-         VALUES ($1,$2,$2,1,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$13)`,
+           rounding_mode,rounding_scale,created_by,updated_by)
+         VALUES ($1,$2,$2,1,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$15)`,
         [tenantId, id, input.establishmentId, input.name, input.commodity, input.destinationUf,
           input.cfop, input.emissionStrategy, input.technicalResponsible, input.effectiveFrom,
-          input.effectiveTo, JSON.stringify(input.taxComponents), actorId]);
+          input.effectiveTo, JSON.stringify(input.taxComponents), input.roundingMode,
+          input.roundingScale, actorId]);
       await this.record(client, tenantId, actorId, 'fiscal.configuration_drafted', 'fiscal_configuration', id,
         { configurationKey: id, version: 1 });
       return { id, configurationKey: id, version: 1, status: 'DRAFT' };
@@ -214,11 +241,13 @@ export class FiscalService {
         `UPDATE app.fiscal_configuration_versions
             SET establishment_id=$3,name=$4,commodity=$5,destination_uf=$6,cfop=$7,
                 emission_strategy=$8,technical_responsible=$9,effective_from=$10,effective_to=$11,
-                tax_components=$12::jsonb,updated_by=$13,updated_at=now()
+                tax_components=$12::jsonb,rounding_mode=$13,rounding_scale=$14,
+                updated_by=$15,updated_at=now()
           WHERE tenant_id=$1 AND id=$2`,
         [tenantId, configurationId, input.establishmentId, input.name, input.commodity,
           input.destinationUf, input.cfop, input.emissionStrategy, input.technicalResponsible,
-          input.effectiveFrom, input.effectiveTo, JSON.stringify(input.taxComponents), actorId]);
+          input.effectiveFrom, input.effectiveTo, JSON.stringify(input.taxComponents),
+          input.roundingMode, input.roundingScale, actorId]);
       await this.record(client, tenantId, actorId, 'fiscal.configuration_updated', 'fiscal_configuration',
         configurationId, { configurationKey: existing.configuration_key, version: existing.version });
       return { id: configurationId, status: 'DRAFT' };
@@ -280,16 +309,117 @@ export class FiscalService {
         `INSERT INTO app.fiscal_configuration_versions
           (tenant_id,id,configuration_key,version,establishment_id,name,operation_type,commodity,
            destination_uf,cfop,emission_strategy,technical_responsible,effective_from,effective_to,
-           tax_components,status,created_by,updated_by)
+           tax_components,rounding_mode,rounding_scale,status,created_by,updated_by)
          SELECT tenant_id,$3,configuration_key,$4,establishment_id,name,operation_type,commodity,
                 destination_uf,cfop,emission_strategy,technical_responsible,effective_from,effective_to,
-                tax_components,'DRAFT',$5,$5
+                tax_components,rounding_mode,rounding_scale,'DRAFT',$5,$5
            FROM app.fiscal_configuration_versions WHERE tenant_id=$1 AND id=$2`,
         [tenantId, configurationId, id, next.rows[0]!.version, actorId]);
       await this.record(client, tenantId, actorId, 'fiscal.configuration_version_created',
         'fiscal_configuration', id,
         { configurationKey: source.configuration_key, version: next.rows[0]!.version, sourceId: configurationId });
       return { id, configurationKey: source.configuration_key, version: next.rows[0]!.version, status: 'DRAFT' };
+    });
+  }
+
+  calculate(tenantId: string, actorId: string, input: CreateFiscalCalculationInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'FISCAL_EDIT');
+      const inputSnapshot = {
+        establishmentId: input.establishmentId, operationType: input.operationType,
+        commodity: input.commodity, destinationUf: input.destinationUf, occurredOn: input.occurredOn,
+        grossAmount: input.grossAmount, currency: input.currency,
+        sourceType: input.sourceType, sourceId: input.sourceId,
+      };
+      const existing = await this.calculationByRequestKey(client, tenantId, input.requestKey);
+      if (existing) {
+        const comparison = await client.query<{ matches: boolean }>(
+          `SELECT input_snapshot=$3::jsonb AS matches FROM app.fiscal_calculations
+            WHERE tenant_id=$1 AND request_key=$2`,
+          [tenantId, input.requestKey, JSON.stringify(inputSnapshot)]);
+        if (!comparison.rows[0]?.matches) {
+          throw new ConflictException({ code: 'FISCAL_CALCULATION_IDEMPOTENCY_CONFLICT' });
+        }
+        return this.mapCalculation(existing);
+      }
+
+      const selected = await client.query<FiscalConfigurationRow>(
+        `SELECT fc.id,fc.configuration_key,fc.version,fc.establishment_id,
+                fe.legal_name AS establishment_name,fe.uf AS establishment_uf,fe.tax_regime,
+                fe.active AS establishment_active,
+                fc.name,fc.operation_type,fc.commodity,fc.destination_uf,fc.cfop,
+                fc.emission_strategy,fc.technical_responsible,fc.effective_from::text,
+                fc.effective_to::text,fc.rounding_mode,fc.rounding_scale,
+                fc.tax_components,fc.status,fc.updated_at,fc.activated_at
+           FROM app.fiscal_configuration_versions fc
+           JOIN app.fiscal_establishments fe
+             ON (fe.tenant_id,fe.id)=(fc.tenant_id,fc.establishment_id)
+          WHERE fc.tenant_id=$1 AND fc.status='ACTIVE' AND fe.active=true
+            AND fc.establishment_id=$2 AND fc.operation_type=$3
+            AND upper(fc.commodity)=upper($4) AND fc.destination_uf=$5
+            AND fc.effective_from <= $6::date
+            AND (fc.effective_to IS NULL OR fc.effective_to >= $6::date)
+          ORDER BY fc.version DESC LIMIT 2`,
+        [tenantId, input.establishmentId, input.operationType, input.commodity,
+          input.destinationUf, input.occurredOn]);
+      if (!selected.rows.length) {
+        throw new UnprocessableEntityException({ code: 'FISCAL_CONFIGURATION_NOT_APPLICABLE' });
+      }
+      if (selected.rows.length > 1) {
+        throw new ConflictException({ code: 'FISCAL_CONFIGURATION_AMBIGUOUS' });
+      }
+      const configuration = selected.rows[0]!;
+      if (configuration.rounding_mode === null || configuration.rounding_scale === null) {
+        throw new ConflictException({ code: 'FISCAL_CONFIGURATION_INVALID' });
+      }
+      const parsed = taxComponentSchema.array().safeParse(configuration.tax_components);
+      if (!parsed.success || parsed.data.some((component) => component.basis === null)) {
+        throw new ConflictException({ code: 'FISCAL_CONFIGURATION_INVALID' });
+      }
+      let memory;
+      try {
+        memory = calculateFiscalMemory({
+          grossAmount: input.grossAmount, roundingMode: configuration.rounding_mode,
+          roundingScale: configuration.rounding_scale,
+          components: parsed.data as FiscalCalculationComponent[],
+        });
+      } catch (error) {
+        if (error instanceof Error && error.message === 'FISCAL_RETENTION_EXCEEDS_GROSS') {
+          throw new UnprocessableEntityException({ code: error.message });
+        }
+        throw error;
+      }
+      const id = randomUUID();
+      const inserted = await client.query(
+        `INSERT INTO app.fiscal_calculations
+          (tenant_id,id,request_key,configuration_id,configuration_key,configuration_version,
+           establishment_id,operation_type,commodity,destination_uf,occurred_on,source_type,
+           source_id,currency,gross_amount,tax_total,retained_total,net_amount,input_snapshot,
+           result_snapshot,calculated_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::jsonb,$20::jsonb,$21)
+         ON CONFLICT (tenant_id,request_key) DO NOTHING RETURNING id`,
+        [tenantId, id, input.requestKey, configuration.id, configuration.configuration_key,
+          configuration.version, input.establishmentId, input.operationType, input.commodity,
+          input.destinationUf, input.occurredOn, input.sourceType, input.sourceId, input.currency,
+          input.grossAmount, memory.taxTotal, memory.retainedTotal, memory.netAmount,
+          JSON.stringify(inputSnapshot), JSON.stringify(memory), actorId]);
+      if (!inserted.rowCount) {
+        throw new ConflictException({ code: 'FISCAL_CALCULATION_IDEMPOTENCY_CONFLICT' });
+      }
+      await this.record(client, tenantId, actorId, 'fiscal.calculation_completed', 'fiscal_calculation', id,
+        { configurationId: configuration.id, configurationKey: configuration.configuration_key,
+          configurationVersion: configuration.version, requestKey: input.requestKey,
+          grossAmount: input.grossAmount, taxTotal: memory.taxTotal,
+          retainedTotal: memory.retainedTotal, netAmount: memory.netAmount });
+      return {
+        id, requestKey: input.requestKey,
+        configuration: {
+          id: configuration.id, key: configuration.configuration_key, version: configuration.version,
+          name: configuration.name,
+        },
+        establishment: { id: input.establishmentId, name: configuration.establishment_name! },
+        context: inputSnapshot, result: memory,
+      };
     });
   }
 
@@ -419,8 +549,28 @@ export class FiscalService {
       name: row.name, operationType: row.operation_type, commodity: row.commodity,
       destinationUf: row.destination_uf, cfop: row.cfop, emissionStrategy: row.emission_strategy,
       technicalResponsible: row.technical_responsible, effectiveFrom: row.effective_from,
-      effectiveTo: row.effective_to, taxComponents: row.tax_components, status: row.status,
+      effectiveTo: row.effective_to, roundingMode: row.rounding_mode,
+      roundingScale: row.rounding_scale, taxComponents: row.tax_components, status: row.status,
       updatedAt: row.updated_at.toISOString(), activatedAt: row.activated_at?.toISOString() ?? null,
+    };
+  }
+
+  private mapCalculation(row: FiscalCalculationRow) {
+    return {
+      id: row.id, requestKey: row.request_key,
+      configuration: {
+        id: row.configuration_id, key: row.configuration_key,
+        version: row.configuration_version, name: row.configuration_name,
+      },
+      establishment: { id: row.establishment_id, name: row.establishment_name },
+      context: row.input_snapshot,
+      result: row.result_snapshot,
+      operationType: row.operation_type, commodity: row.commodity,
+      destinationUf: row.destination_uf, occurredOn: row.occurred_on,
+      sourceType: row.source_type, sourceId: row.source_id, currency: row.currency,
+      grossAmount: row.gross_amount, taxTotal: row.tax_total,
+      retainedTotal: row.retained_total, netAmount: row.net_amount,
+      calculatedBy: row.calculated_by, calculatedAt: row.calculated_at.toISOString(),
     };
   }
 
@@ -450,7 +600,8 @@ export class FiscalService {
               fe.active AS establishment_active,
               fc.name,fc.operation_type,fc.commodity,fc.destination_uf,fc.cfop,
               fc.emission_strategy,fc.technical_responsible,fc.effective_from::text,
-              fc.effective_to::text,fc.tax_components,fc.status,fc.updated_at,fc.activated_at
+              fc.effective_to::text,fc.rounding_mode,fc.rounding_scale,
+              fc.tax_components,fc.status,fc.updated_at,fc.activated_at
          FROM app.fiscal_configuration_versions fc
          LEFT JOIN app.fiscal_establishments fe
            ON (fe.tenant_id,fe.id)=(fc.tenant_id,fc.establishment_id)
@@ -471,7 +622,30 @@ export class FiscalService {
     if (!configuration.technical_responsible) fields.push('technicalResponsible');
     if (!configuration.effective_from) fields.push('effectiveFrom');
     if (!Array.isArray(configuration.tax_components) || !configuration.tax_components.length) fields.push('taxComponents');
+    if (Array.isArray(configuration.tax_components)
+      && configuration.tax_components.some((component) => typeof component !== 'object'
+        || component === null || !('basis' in component) || component.basis !== 'DOCUMENT_TOTAL')) {
+      fields.push('taxComponents.basis');
+    }
+    if (!configuration.rounding_mode) fields.push('roundingMode');
+    if (configuration.rounding_scale === null) fields.push('roundingScale');
     return fields;
+  }
+
+  private async calculationByRequestKey(client: PoolClient, tenantId: string, requestKey: string) {
+    const result = await client.query<FiscalCalculationRow>(
+      `SELECT c.id,c.request_key,c.configuration_id,c.configuration_key,c.configuration_version,
+              fc.name AS configuration_name,c.establishment_id,fe.legal_name AS establishment_name,
+              c.operation_type,c.commodity,c.destination_uf,c.occurred_on::text,c.source_type,
+              c.source_id,c.currency,c.gross_amount::text,c.tax_total::text,c.retained_total::text,
+              c.net_amount::text,c.input_snapshot,c.result_snapshot,c.calculated_by,c.calculated_at
+         FROM app.fiscal_calculations c
+         JOIN app.fiscal_configuration_versions fc
+           ON (fc.tenant_id,fc.id)=(c.tenant_id,c.configuration_id)
+         JOIN app.fiscal_establishments fe
+           ON (fe.tenant_id,fe.id)=(c.tenant_id,c.establishment_id)
+        WHERE c.tenant_id=$1 AND c.request_key=$2`, [tenantId, requestKey]);
+    return result.rows[0] ?? null;
   }
 
   private async sourceForEvent(client: PoolClient, tenantId: string, financialEventId: string) {
