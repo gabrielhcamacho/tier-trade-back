@@ -32,6 +32,8 @@ describe.runIf(Boolean(databaseUrl))('sales fulfillment and inventory ledger', (
       '20261002220831_financial_receivables_slice.sql',
       '20261002224025_risk_position_slice.sql',
       '20261002224945_cover_operational_foreign_keys.sql',
+      '20261002234414_fiscal_document_registry.sql',
+      '20261003000202_cover_fiscal_source_foreign_key.sql',
     ];
     for (const migration of migrations) {
       await setup.query(await readFile(new URL(`../../supabase/migrations/${migration}`, import.meta.url), 'utf8'));

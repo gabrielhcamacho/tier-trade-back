@@ -22,6 +22,10 @@
 | `finance.title_issued` | financial_title | previsão pronta é vinculada a documento e vencimento | contas a receber |
 | `finance.receipt_recorded` | financial_settlement | baixa parcial ou total é confirmada | caixa, conciliação |
 | `finance.receipt_reversed` | financial_settlement | baixa é estornada com motivo | caixa, conciliação, auditoria |
+| `fiscal.document_received` | fiscal_document | NF-e é vinculada à expedição e ao evento financeiro | validação fiscal, auditoria |
+| `fiscal.document_corrected` | fiscal_document | dados do documento são corrigidos e voltam à conferência | validação fiscal, financeiro |
+| `fiscal.document_validated` | fiscal_document | chave e valor são conferidos e o título é vinculado | financeiro, reconciliação |
+| `fiscal.document_rejected` | fiscal_document | documento é rejeitado com motivo e seu vínculo financeiro é removido | correção fiscal, auditoria |
 
 Todos carregam `id`, `tenant_id`, tipo, agregado, payload mínimo e instante. A outbox é gravada na mesma transação da mudança. Publicação é pelo menos uma vez; consumidores deduplicam por `id`.
 
@@ -35,6 +39,7 @@ Todos carregam `id`, `tenant_id`, tipo, agregado, payload mínimo e instante. A 
 - o módulo de estoque registra, na mesma transação do recebimento, entrada, correção ou estorno compensatório; o saldo é sempre a soma do livro de movimentos;
 - alocações alteram somente disponibilidade; expedições criam movimento `DISPATCH` negativo e atualizam o saldo executado da venda na mesma transação;
 - a mesma transação da expedição cria o evento financeiro canônico; título e baixa continuam fatos posteriores e separados;
+- validação fiscal compara o total da NF-e ao evento financeiro; não calcula tributos e liga o título apenas quando não há divergência;
 - `published_at` indica entrega aos consumidores internos atuais.
 - o worker expõe saúde em `/health/live` e `/health/ready` e métricas em `/metrics` na porta operacional própria;
 - falha, retentativa e recuperação geram logs JSON sem payload de negócio.

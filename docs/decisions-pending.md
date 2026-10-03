@@ -12,7 +12,8 @@
 - transporte externo definitivo da outbox e tecnologia de fila; o dispatcher interno em PostgreSQL já está definido;
 - ferramenta de observabilidade e retenção dos sinais;
 - integração com Mountier Agro;
-- regras fiscais, contábeis, arredondamento monetário por tenant e descontos de qualidade;
+- pacote fiscal do piloto: UFs, estabelecimentos, regimes, CFOPs, incidências, responsável técnico e emissão nativa ou integrada;
+- regras contábeis, plano de contas, arredondamento monetário por tenant e descontos de qualidade;
 - pacote inicial de risco de mercado: fonte, praça, instrumentos, periodicidade, curva, base, câmbio e responsabilidade de execução;
 - nome comercial definitivo do produto.
 
@@ -28,3 +29,4 @@
 - piloto e produção usarão projetos Supabase separados.
 - expedições de venda geram previsão financeira; títulos e baixas são registros separados, auditados e reversíveis.
 - posição física, contratual e financeira usa registros oficiais; limites de posição são configuráveis e versionados por tenant.
+- documentos fiscais podem ser recebidos, corrigidos, validados e rejeitados; cálculo tributário permanece bloqueado até homologação do pacote fiscal.

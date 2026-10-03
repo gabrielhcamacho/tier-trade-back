@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 
-export const DEMO_SEED_VERSION = 6;
+export const DEMO_SEED_VERSION = 7;
 
 export type ResetDemoTenantInput = {
   tenantId: string;
@@ -24,6 +24,7 @@ export type ResetDemoTenantResult = {
   financialEvents: number;
   financialTitles: number;
   financialSettlements: number;
+  fiscalDocuments: number;
   riskPolicies: number;
 };
 
@@ -88,6 +89,7 @@ const ids = {
     title: 'e1000000-0000-4000-8000-000000000001',
     settlement: 'e2000000-0000-4000-8000-000000000001',
   },
+  fiscalDocument: 'e4000000-0000-4000-8000-000000000001',
   riskPolicy: 'e3000000-0000-4000-8000-000000000001',
 } as const;
 
@@ -116,7 +118,8 @@ export async function resetDemoTenant(
     if (membership.rowCount !== 1) throw new Error('ACTIVE_DEMO_ACTOR_MEMBERSHIP_NOT_FOUND');
     const capabilities = membership.rows[0]?.capabilities ?? [];
     if (!capabilities.includes('COMMERCIAL_EDIT') || !capabilities.includes('OPERATIONS_EDIT')
-      || !capabilities.includes('FINANCE_EDIT') || !capabilities.includes('RISK_MANAGE')) {
+      || !capabilities.includes('FINANCE_EDIT') || !capabilities.includes('FISCAL_EDIT')
+      || !capabilities.includes('RISK_MANAGE')) {
       throw new Error('DEMO_ACTOR_CAPABILITIES_INCOMPLETE');
     }
 
@@ -155,6 +158,7 @@ export async function resetDemoTenant(
       financialEvents: 1,
       financialTitles: 1,
       financialSettlements: 1,
+      fiscalDocuments: 1,
       riskPolicies: 1,
     };
   } catch (error) {
@@ -167,6 +171,7 @@ export async function resetDemoTenant(
 
 async function clearOperationalData(client: PoolClient, tenantId: string, actorId: string): Promise<void> {
   await client.query('SELECT app.delete_demo_risk($1,$2)', [tenantId, actorId]);
+  await client.query('SELECT app.delete_demo_fiscal($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_finance($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_sales_fulfillment($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_inventory($1,$2)', [tenantId, actorId]);
@@ -355,9 +360,21 @@ async function seedOperationalData(client: PoolClient, input: ResetDemoTenantInp
       }), actorId],
   );
   await client.query(
+    `INSERT INTO app.fiscal_documents
+      (tenant_id,id,document_type,direction,source_type,source_id,sales_contract_id,
+       financial_event_id,document_number,access_key,issued_at,total_amount,status,
+       validation_notes,created_by,updated_by,created_at,updated_at)
+     VALUES ($1,$2,'NFE','OUTBOUND','INVENTORY_DISPATCH',$3,$4,$5,'NFE-DEMO-0001',
+       '99000000000000000000000000000000000000000001','2026-10-01T16:10:00Z',11360.00,
+       'RECEIVED','Documento fiscal fictício pronto para validação na demonstração.',$6,$6,
+       '2026-10-01T16:15:00Z','2026-10-01T16:15:00Z')`,
+    [tenantId, ids.fiscalDocument, ids.fulfillment.dispatch, ids.fulfillment.salesContract,
+      ids.finance.event, actorId],
+  );
+  await client.query(
     `INSERT INTO app.financial_titles
       (tenant_id,id,financial_event_id,title_number,document_reference,due_date,amount,status,issued_by,issued_at)
-     VALUES ($1,$2,$3,'TR-2026-0001','NF-DEMO-0001','2026-10-08',11360.00,
+     VALUES ($1,$2,$3,'TR-2026-0001','NFE-DEMO-0001','2026-10-08',11360.00,
        'PARTIALLY_SETTLED',$4,'2026-10-01T16:20:00Z')`,
     [tenantId, ids.finance.title, ids.finance.event, actorId],
   );
@@ -390,6 +407,7 @@ async function seedReadModelsAndAudit(client: PoolClient, input: ResetDemoTenant
     { id: randomUUID(), type: 'load.receipt_recorded', aggregate: 'load', aggregateId: ids.loads[0], occurredAt: '2026-10-01T12:15:00Z', payload: { version: 1, netWeightKg: '32920.000', qualityDecision: 'ACCEPTED' } },
     { id: randomUUID(), type: 'load.receipt_recorded', aggregate: 'load', aggregateId: ids.loads[1], occurredAt: '2026-10-01T14:05:00Z', payload: { version: 1, netWeightKg: '35860.000', qualityDecision: 'REVIEW_REQUIRED' } },
     { id: randomUUID(), type: 'finance.forecast_projected', aggregate: 'financial_event', aggregateId: ids.finance.event, occurredAt: '2026-10-01T16:05:00Z', payload: { sourceId: ids.fulfillment.dispatch, calculatedAmount: '11360.00' } },
+    { id: randomUUID(), type: 'fiscal.document_received', aggregate: 'fiscal_document', aggregateId: ids.fiscalDocument, occurredAt: '2026-10-01T16:15:00Z', payload: { financialEventId: ids.finance.event, documentNumber: 'NFE-DEMO-0001' } },
     { id: randomUUID(), type: 'finance.title_issued', aggregate: 'financial_title', aggregateId: ids.finance.title, occurredAt: '2026-10-01T16:20:00Z', payload: { financialEventId: ids.finance.event, amount: '11360.00' } },
     { id: randomUUID(), type: 'finance.receipt_recorded', aggregate: 'financial_settlement', aggregateId: ids.finance.settlement, occurredAt: '2026-10-02T13:05:00Z', payload: { titleId: ids.finance.title, amount: '4000.00' } },
     { id: randomUUID(), type: 'risk.policy_configured', aggregate: 'risk_policy', aggregateId: ids.riskPolicy, occurredAt: '2026-10-01T12:00:00Z', payload: { commodity: 'MILHO', version: 1, maxNetOpenKg: '2100000.000', warningThresholdPct: '80.00' } },

@@ -24,6 +24,8 @@ describe('commercial foundation migration', () => {
       '20261002220831_financial_receivables_slice.sql',
       '20261002224025_risk_position_slice.sql',
       '20261002224945_cover_operational_foreign_keys.sql',
+      '20261002234414_fiscal_document_registry.sql',
+      '20261003000202_cover_fiscal_source_foreign_key.sql',
     ]) {
       const migration = await readFile(new URL(`../../supabase/migrations/${migrationName}`, import.meta.url), 'utf8');
       await db.exec(migration);
@@ -78,6 +80,8 @@ describe('commercial foundation migration', () => {
     expect(visibleMovements.rows).toEqual([{ count: 0 }]);
     const visibleRiskPolicies = await db.query<{ count: number }>('SELECT count(*)::int AS count FROM app.risk_policies');
     expect(visibleRiskPolicies.rows).toEqual([{ count: 0 }]);
+    const visibleFiscalDocuments = await db.query<{ count: number }>('SELECT count(*)::int AS count FROM app.fiscal_documents');
+    expect(visibleFiscalDocuments.rows).toEqual([{ count: 0 }]);
     await db.exec('RESET ROLE');
     await db.close();
   });

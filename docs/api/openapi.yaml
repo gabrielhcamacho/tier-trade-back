@@ -249,6 +249,54 @@ paths:
       summary: Consolida posição física, contratual, financeira e limites do tenant
       responses:
         '200': { description: Posição calculada; métricas de mercado não configuradas são explicitamente bloqueadas }
+  /v1/fiscal:
+    get:
+      summary: Retorna documentos fiscais, cadeia operacional e pendências do tenant
+      responses:
+        '200': { description: Workspace fiscal com cálculo tributário explicitamente bloqueado quando não configurado }
+  /v1/fiscal/documents:
+    post:
+      summary: Registra NF-e de saída vinculada a um evento financeiro de expedição
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateFiscalDocument' } } }
+      responses:
+        '201': { description: Documento recebido para conferência }
+        '409': { description: Documento, expedição ou chave já registrada }
+  /v1/fiscal/documents/{documentId}:
+    patch:
+      summary: Corrige documento e o devolve para conferência
+      parameters:
+        - { name: documentId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/UpdateFiscalDocument' } } }
+      responses:
+        '200': { description: Correção persistida e vínculo financeiro removido até nova validação }
+  /v1/fiscal/documents/{documentId}/validate:
+    post:
+      summary: Valida chave e valor e vincula o título financeiro existente
+      parameters:
+        - { name: documentId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '201': { description: Documento validado }
+        '422': { description: Chave ausente ou valor divergente }
+  /v1/fiscal/documents/{documentId}/reject:
+    post:
+      summary: Rejeita documento com motivo, preservando o histórico
+      parameters:
+        - { name: documentId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason]
+              properties: { reason: { type: string, minLength: 3, maxLength: 500 } }
+      responses:
+        '201': { description: Documento rejeitado e título desvinculado }
   /v1/risk/policy:
     patch:
       summary: Publica nova versão do limite de posição líquida por commodity
@@ -291,7 +339,7 @@ components:
   schemas:
     Capability:
       type: string
-      enum: [COMMERCIAL_EDIT, COMMERCIAL_APPROVE, COMMERCIAL_CANCEL, MARGIN_POLICY_MANAGE, ACCESS_MANAGE, OPERATIONS_EDIT, FINANCE_EDIT, RISK_MANAGE]
+      enum: [COMMERCIAL_EDIT, COMMERCIAL_APPROVE, COMMERCIAL_CANCEL, MARGIN_POLICY_MANAGE, ACCESS_MANAGE, OPERATIONS_EDIT, FINANCE_EDIT, FISCAL_EDIT, RISK_MANAGE]
     DecimalString: { type: string, pattern: '^\d+(?:\.\d{1,6})?$' }
     CreateOffer:
       type: object
@@ -390,3 +438,20 @@ components:
         commodity: { const: MILHO }
         maxNetOpenKg: { type: string, pattern: '^\d+(?:\.\d{1,3})?$' }
         warningThresholdPct: { type: string, pattern: '^\d+(?:\.\d{1,2})?$' }
+    CreateFiscalDocument:
+      allOf:
+        - $ref: '#/components/schemas/UpdateFiscalDocument'
+        - type: object
+          required: [financialEventId]
+          properties:
+            financialEventId: { type: string, format: uuid }
+    UpdateFiscalDocument:
+      type: object
+      additionalProperties: false
+      required: [documentNumber, accessKey, issuedAt, totalAmount, validationNotes]
+      properties:
+        documentNumber: { type: string, minLength: 1, maxLength: 40 }
+        accessKey: { type: [string, 'null'], pattern: '^\d{44}$' }
+        issuedAt: { type: string, format: date-time }
+        totalAmount: { type: string, pattern: '^\d+(?:\.\d{1,2})?$' }
+        validationNotes: { type: [string, 'null'], minLength: 3, maxLength: 1000 }

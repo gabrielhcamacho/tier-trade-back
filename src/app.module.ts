@@ -7,9 +7,10 @@ import { OperationsModule } from './operations/operations.module.js';
 import { InventoryModule } from './inventory/inventory.module.js';
 import { FinanceModule } from './finance/finance.module.js';
 import { RiskModule } from './risk/risk.module.js';
+import { FiscalModule } from './fiscal/fiscal.module.js';
 
 @Module({
-  imports: [AccessModule, CommercialModule, FinanceModule, HealthModule, InventoryModule,
+  imports: [AccessModule, CommercialModule, FinanceModule, FiscalModule, HealthModule, InventoryModule,
     OperationsModule, OutboxModule, RiskModule],
 })
 export class AppModule {}
