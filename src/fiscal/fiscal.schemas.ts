@@ -99,14 +99,58 @@ export const createFiscalCalculationSchema = z.object({
   occurredOn: z.iso.date(),
   grossAmount: calculationAmount,
   currency: z.literal('BRL'),
-  sourceType: z.enum(['MANUAL', 'FISCAL_DOCUMENT']),
+  sourceType: z.enum(['MANUAL', 'FISCAL_DOCUMENT', 'FINANCIAL_EVENT']),
   sourceId: z.uuid().nullable(),
 }).superRefine((calculation, context) => {
-  if (calculation.sourceType === 'FISCAL_DOCUMENT' && calculation.sourceId === null) {
-    context.addIssue({ code: 'custom', path: ['sourceId'], message: 'Documento fiscal de origem obrigatório.' });
+  if (calculation.sourceType !== 'MANUAL' && calculation.sourceId === null) {
+    context.addIssue({ code: 'custom', path: ['sourceId'], message: 'A origem vinculada é obrigatória.' });
   }
   if (calculation.sourceType === 'MANUAL' && calculation.sourceId !== null) {
-    context.addIssue({ code: 'custom', path: ['sourceId'], message: 'Cálculo manual não aceita documento de origem.' });
+    context.addIssue({ code: 'custom', path: ['sourceId'], message: 'Cálculo manual não aceita origem vinculada.' });
+  }
+});
+
+export const createFiscalAuthoritySchema = z.object({
+  legalName: z.string().trim().min(3).max(180),
+  taxId: z.string().trim().regex(/^\d{11,14}$/, 'Informe de 11 a 14 dígitos.').nullable(),
+  jurisdiction: z.enum(['FEDERAL', 'STATE', 'MUNICIPAL']),
+  uf: nullableUf,
+}).superRefine((authority, context) => {
+  if (authority.jurisdiction === 'STATE' && authority.uf === null) {
+    context.addIssue({ code: 'custom', path: ['uf'], message: 'Autoridade estadual exige UF.' });
+  }
+});
+
+const acceptFiscalObligationSchema = z.object({
+  tax: z.enum(['ICMS', 'PIS', 'COFINS', 'FUNRURAL']),
+  authorityId: z.uuid(),
+  competenceDate: z.iso.date(),
+  dueDate: z.iso.date(),
+  titleEffect: z.enum(['NONE', 'REDUCE_SOURCE_TITLE']),
+  paymentResponsibility: z.enum(['TENANT', 'COUNTERPARTY']),
+  titleNumber: optionalText(3, 40),
+  documentReference: optionalText(1, 80),
+}).superRefine((obligation, context) => {
+  if (obligation.dueDate < obligation.competenceDate) {
+    context.addIssue({ code: 'custom', path: ['dueDate'], message: 'O vencimento não pode anteceder a competência.' });
+  }
+  if (obligation.paymentResponsibility === 'TENANT'
+    && (!obligation.titleNumber || !obligation.documentReference)) {
+    context.addIssue({ code: 'custom', path: ['titleNumber'], message: 'Título e referência são obrigatórios quando o tenant recolhe.' });
+  }
+  if (obligation.paymentResponsibility === 'COUNTERPARTY'
+    && (obligation.titleNumber !== null || obligation.documentReference !== null)) {
+    context.addIssue({ code: 'custom', path: ['titleNumber'], message: 'Não informe título quando a contraparte recolhe.' });
+  }
+});
+
+export const acceptFiscalCalculationSchema = z.object({
+  requestKey: z.uuid(),
+  obligations: z.array(acceptFiscalObligationSchema).min(1).max(4),
+}).superRefine((acceptance, context) => {
+  const taxes = acceptance.obligations.map((obligation) => obligation.tax);
+  if (new Set(taxes).size !== taxes.length) {
+    context.addIssue({ code: 'custom', path: ['obligations'], message: 'Cada tributo pode gerar apenas uma obrigação.' });
   }
 });
 
@@ -118,3 +162,5 @@ export type CreateFiscalEstablishmentInput = z.infer<typeof createFiscalEstablis
 export type CreateFiscalConfigurationInput = z.infer<typeof createFiscalConfigurationSchema>;
 export type UpdateFiscalConfigurationInput = z.infer<typeof updateFiscalConfigurationSchema>;
 export type CreateFiscalCalculationInput = z.infer<typeof createFiscalCalculationSchema>;
+export type CreateFiscalAuthorityInput = z.infer<typeof createFiscalAuthoritySchema>;
+export type AcceptFiscalCalculationInput = z.infer<typeof acceptFiscalCalculationSchema>;

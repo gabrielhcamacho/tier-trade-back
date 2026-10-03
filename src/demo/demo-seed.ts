@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 
-export const DEMO_SEED_VERSION = 9;
+export const DEMO_SEED_VERSION = 10;
 
 export type ResetDemoTenantInput = {
   tenantId: string;
@@ -28,6 +28,8 @@ export type ResetDemoTenantResult = {
   fiscalEstablishments: number;
   fiscalConfigurations: number;
   fiscalCalculations: number;
+  fiscalAuthorities: number;
+  fiscalObligations: number;
   riskPolicies: number;
 };
 
@@ -95,6 +97,7 @@ const ids = {
   fiscalDocument: 'e4000000-0000-4000-8000-000000000001',
   fiscalEstablishment: 'e5000000-0000-4000-8000-000000000001',
   fiscalConfiguration: 'e6000000-0000-4000-8000-000000000001',
+  fiscalAuthority: 'e8000000-0000-4000-8000-000000000001',
   riskPolicy: 'e3000000-0000-4000-8000-000000000001',
 } as const;
 
@@ -167,6 +170,8 @@ export async function resetDemoTenant(
       fiscalEstablishments: 1,
       fiscalConfigurations: 1,
       fiscalCalculations: 0,
+      fiscalAuthorities: 1,
+      fiscalObligations: 0,
       riskPolicies: 1,
     };
   } catch (error) {
@@ -179,9 +184,9 @@ export async function resetDemoTenant(
 
 async function clearOperationalData(client: PoolClient, tenantId: string, actorId: string): Promise<void> {
   await client.query('SELECT app.delete_demo_risk($1,$2)', [tenantId, actorId]);
-  await client.query('SELECT app.delete_demo_fiscal_configuration($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_fiscal($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_finance($1,$2)', [tenantId, actorId]);
+  await client.query('SELECT app.delete_demo_fiscal_configuration($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_sales_fulfillment($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_inventory($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_load_receipts($1,$2)', [tenantId, actorId]);
@@ -356,9 +361,9 @@ async function seedOperationalData(client: PoolClient, input: ResetDemoTenantInp
   await client.query(
     `INSERT INTO app.financial_events
       (tenant_id,id,event_type,source_type,source_id,sales_contract_id,counterparty_id,direction,
-       quantity_kg,unit_price,raw_amount,calculated_amount,calculation_status,expected_on,
+       inventory_dispatch_id,quantity_kg,unit_price,raw_amount,calculated_amount,calculation_status,expected_on,
        formula_code,formula_version,calculation_memory,created_by,created_at)
-     VALUES ($1,$2,'SALE_DISPATCH_RECEIVABLE','INVENTORY_DISPATCH',$3,$4,$5,'INFLOW',
+     VALUES ($1,$2,'SALE_DISPATCH_RECEIVABLE','INVENTORY_DISPATCH',$3,$4,$5,'INFLOW',$3,
        8000.000,1.420000,11360.000000000,11360.00,'READY','2026-10-08',
        'SALE_DISPATCH_GROSS',1,$6::jsonb,$7,'2026-10-01T16:05:00Z')`,
     [tenantId, ids.finance.event, ids.fulfillment.dispatch, ids.fulfillment.salesContract,
@@ -367,6 +372,13 @@ async function seedOperationalData(client: PoolClient, input: ResetDemoTenantInp
         operation: 'quantityKg × unitPricePerKg', rawAmount: '11360.000000000',
         currency: 'BRL', rounding: 'NOT_REQUIRED_EXACT_CENTS',
       }), actorId],
+  );
+  await client.query(
+    `INSERT INTO app.fiscal_authorities
+      (tenant_id,id,legal_name,tax_id,jurisdiction,uf,created_by,updated_by,created_at,updated_at)
+     VALUES ($1,$2,'Autoridade fiscal estadual — Dado fictício',NULL,'STATE','GO',$3,$3,
+       '2026-10-01T12:00:00Z','2026-10-01T12:00:00Z')`,
+    [tenantId, ids.fiscalAuthority, actorId],
   );
   await client.query(
     `INSERT INTO app.fiscal_documents

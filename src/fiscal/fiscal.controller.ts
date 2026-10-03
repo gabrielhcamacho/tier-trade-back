@@ -3,9 +3,11 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Identity, type RequestIdentity, RequestIdentityGuard } from '../auth/request-identity.guard.js';
 import { SchemaPipe } from '../common/schema.pipe.js';
 import {
-  createFiscalCalculationSchema, createFiscalConfigurationSchema, createFiscalDocumentSchema, createFiscalEstablishmentSchema,
+  acceptFiscalCalculationSchema, createFiscalAuthoritySchema, createFiscalCalculationSchema,
+  createFiscalConfigurationSchema, createFiscalDocumentSchema, createFiscalEstablishmentSchema,
   rejectFiscalDocumentSchema, updateFiscalConfigurationSchema, updateFiscalDocumentSchema,
-  type CreateFiscalCalculationInput, type CreateFiscalConfigurationInput, type CreateFiscalDocumentInput,
+  type AcceptFiscalCalculationInput, type CreateFiscalAuthorityInput, type CreateFiscalCalculationInput,
+  type CreateFiscalConfigurationInput, type CreateFiscalDocumentInput,
   type CreateFiscalEstablishmentInput, type RejectFiscalDocumentInput,
   type UpdateFiscalConfigurationInput, type UpdateFiscalDocumentInput,
 } from './fiscal.schemas.js';
@@ -65,6 +67,19 @@ export class FiscalController {
   calculate(@Identity() identity: RequestIdentity,
     @Body(new SchemaPipe(createFiscalCalculationSchema)) input: CreateFiscalCalculationInput) {
     return this.service.calculate(identity.tenantId, identity.actorId, input);
+  }
+
+  @Post('authorities')
+  createAuthority(@Identity() identity: RequestIdentity,
+    @Body(new SchemaPipe(createFiscalAuthoritySchema)) input: CreateFiscalAuthorityInput) {
+    return this.service.createAuthority(identity.tenantId, identity.actorId, input);
+  }
+
+  @Post('calculations/:calculationId/accept')
+  acceptCalculation(@Identity() identity: RequestIdentity,
+    @Param('calculationId', ParseUUIDPipe) calculationId: string,
+    @Body(new SchemaPipe(acceptFiscalCalculationSchema)) input: AcceptFiscalCalculationInput) {
+    return this.service.acceptCalculation(identity.tenantId, identity.actorId, calculationId, input);
   }
 
   @Post('documents')

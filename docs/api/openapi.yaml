@@ -273,6 +273,15 @@ paths:
         content: { application/json: { schema: { $ref: '#/components/schemas/FiscalEstablishmentInput' } } }
       responses:
         '200': { description: Estabelecimento atualizado }
+  /v1/fiscal/authorities:
+    post:
+      summary: Cadastra uma autoridade fiscal favorecida pelo recolhimento
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/FiscalAuthorityInput' } } }
+      responses:
+        '201': { description: Autoridade cadastrada para o tenant }
+        '409': { description: Autoridade equivalente já cadastrada }
   /v1/fiscal/configurations:
     post:
       summary: Cria a primeira versão em rascunho de uma configuração fiscal
@@ -319,6 +328,17 @@ paths:
         '201': { description: Cálculo criado ou repetição idempotente retornada }
         '409': { description: Configuração ambígua, inválida ou chave idempotente divergente }
         '422': { description: Nenhuma configuração aplicável ou retenção superior ao bruto }
+  /v1/fiscal/calculations/{calculationId}/accept:
+    post:
+      summary: Aceita a memória e gera obrigações e efeitos financeiros atômicos
+      parameters:
+        - { name: calculationId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/AcceptFiscalCalculation' } } }
+      responses:
+        '201': { description: Obrigações, ajustes e títulos fiscais criados ou repetição idempotente retornada }
+        '409': { description: Aceite anterior divergente, título insuficiente ou conjunto de obrigações incompatível }
   /v1/fiscal/documents:
     post:
       summary: Registra NF-e de saída vinculada a um evento financeiro de expedição
@@ -550,6 +570,15 @@ components:
           type: array
           maxItems: 4
           items: { $ref: '#/components/schemas/FiscalTaxComponent' }
+    FiscalAuthorityInput:
+      type: object
+      additionalProperties: false
+      required: [legalName, taxId, jurisdiction, uf]
+      properties:
+        legalName: { type: string, minLength: 3, maxLength: 180 }
+        taxId: { type: [string, 'null'], pattern: '^\d{11,14}$' }
+        jurisdiction: { type: string, enum: [FEDERAL, STATE, MUNICIPAL] }
+        uf: { type: [string, 'null'], pattern: '^[A-Z]{2}$' }
     FiscalTaxComponent:
       type: object
       additionalProperties: false
@@ -573,5 +602,28 @@ components:
         occurredOn: { type: string, format: date }
         grossAmount: { type: string, pattern: '^(?:0|[1-9]\d{0,17})(?:\.\d{1,6})?$' }
         currency: { const: BRL }
-        sourceType: { type: string, enum: [MANUAL, FISCAL_DOCUMENT] }
+        sourceType: { type: string, enum: [MANUAL, FISCAL_DOCUMENT, FINANCIAL_EVENT] }
         sourceId: { type: [string, 'null'], format: uuid }
+    AcceptFiscalCalculation:
+      type: object
+      additionalProperties: false
+      required: [requestKey, obligations]
+      properties:
+        requestKey: { type: string, format: uuid }
+        obligations:
+          type: array
+          minItems: 1
+          maxItems: 4
+          items:
+            type: object
+            additionalProperties: false
+            required: [tax, authorityId, competenceDate, dueDate, titleEffect, paymentResponsibility, titleNumber, documentReference]
+            properties:
+              tax: { type: string, enum: [ICMS, PIS, COFINS, FUNRURAL] }
+              authorityId: { type: string, format: uuid }
+              competenceDate: { type: string, format: date }
+              dueDate: { type: string, format: date }
+              titleEffect: { type: string, enum: [NONE, REDUCE_SOURCE_TITLE] }
+              paymentResponsibility: { type: string, enum: [TENANT, COUNTERPARTY] }
+              titleNumber: { type: [string, 'null'], minLength: 3, maxLength: 40 }
+              documentReference: { type: [string, 'null'], minLength: 1, maxLength: 80 }

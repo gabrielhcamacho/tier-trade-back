@@ -20,10 +20,14 @@ Cada cálculo preserva:
 - total tributário, total retido, valor líquido, modo e escala de arredondamento;
 - usuário e instante da execução.
 
+## Aceite e efeitos
+
+A memória calculada não altera o financeiro. No aceite, o usuário informa autoridade, competência, vencimento, responsável pelo recolhimento e eventual efeito sobre o título de origem para cada componente positivo. O fluxo cria obrigações, ajustes e títulos fiscais atomicamente e preserva idempotência.
+
 ## Limites deliberados
 
-A única base disponível nesta etapa é `DOCUMENT_TOTAL`, escolhida explicitamente na configuração. O motor não contém CFOP, alíquota ou interpretação fiscal predefinida. Obrigações tributárias, ajuste de título, emissão e contabilidade são as próximas fatias.
+A única base disponível nesta etapa é `DOCUMENT_TOTAL`, escolhida explicitamente na configuração. O motor não contém CFOP, alíquota ou interpretação fiscal predefinida. Pagamento/baixa de obrigações e contabilização permanecem para fatias posteriores.
 
 ## Verificação
 
-Os testes cobrem cálculo decimal, diferença entre modos de arredondamento, seleção por contexto, ausência de regra, idempotência, conflito de chave e persistência da memória sob RLS.
+Os testes cobrem cálculo decimal, modos de arredondamento, seleção por contexto, ausência de regra, idempotência, aceite, obrigação, ajuste do título, título fiscal separado e persistência sob RLS.

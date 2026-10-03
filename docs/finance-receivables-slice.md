@@ -19,6 +19,10 @@ Uma expedição confirmada gera previsão de entrada. O usuário financeiro pode
 - leitura exige membership; mutações exigem `FINANCE_EDIT`;
 - RLS forçada e chaves compostas impedem referência cruzada entre tenants.
 
+## Evolução fiscal integrada
+
+O saldo do título pode receber um ajuste `FISCAL_RETENTION` originado por obrigação fiscal aceita, sem alterar seu valor original. Quando o tenant é responsável pelo recolhimento, a obrigação cria outro evento e outro título de saída cujo favorecido é a autoridade fiscal.
+
 ## Fora desta fatia
 
-Contas a pagar, autorização bancária, extrato e conciliação automática, emissão ou validação fiscal, retenções, impostos, juros, multa, comissão e lançamentos contábeis. Esses itens dependem dos pacotes homologados do piloto e entram nas próximas slices sem alterar o livro criado aqui.
+Baixa de contas a pagar, autorização bancária, extrato e conciliação automática, emissão de guia, juros, multa, comissão e lançamentos contábeis. Esses itens dependem dos pacotes homologados do piloto e entram nas próximas slices sem alterar o livro criado aqui.

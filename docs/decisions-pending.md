@@ -25,10 +25,11 @@
 - o Control Plane mínimo resolve um único tenant ativo por usuário e coordena convite, membership e capabilities;
 - no MVP, o convite parte da API administrativa; a origem será substituída pelo painel interno comercial sem mudar o contrato de acesso.
 - o projeto `Tier trade geral` em `sa-east-1` é o ambiente compartilhado do piloto;
-- SSL do banco está obrigatório e as sete migrations locais estão alinhadas ao remoto;
+- SSL do banco está obrigatório e as migrations versionadas são aplicadas pelo fluxo Supabase CLI;
 - piloto e produção usarão projetos Supabase separados.
 - expedições de venda geram previsão financeira; títulos e baixas são registros separados, auditados e reversíveis.
 - posição física, contratual e financeira usa registros oficiais; limites de posição são configuráveis e versionados por tenant.
 - documentos fiscais podem ser recebidos, corrigidos, validados e rejeitados; o cálculo tributário só ocorre com configuração ativa e homologada.
 - estabelecimentos e configurações fiscais podem ser cadastrados, editados, ativados e versionados; versões ativas são imutáveis e registram base e arredondamento explícitos.
-- o motor fiscal seleciona uma versão por contexto e vigência, usa Decimal, é idempotente e persiste memória imutável; gerar obrigações e efeitos financeiros permanece para a próxima fatia.
+- o motor fiscal seleciona uma versão por contexto e vigência, usa Decimal, é idempotente e persiste memória imutável;
+- o aceite fiscal gera obrigações, ajuste separado do título comercial e conta a pagar separada para a autoridade; baixa de contas a pagar e contabilização permanecem para as próximas fatias.

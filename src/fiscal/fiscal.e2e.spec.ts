@@ -35,6 +35,7 @@ describe.runIf(Boolean(databaseUrl))('fiscal document registry', () => {
       '20261003000202_cover_fiscal_source_foreign_key.sql',
       '20261003003904_fiscal_configuration_catalog.sql',
       '20261003011929_fiscal_calculation_engine.sql',
+      '20261003014022_fiscal_obligations_and_financial_effects.sql',
     ]) {
       await setup.query(await readFile(new URL(`../../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
     }
@@ -60,7 +61,7 @@ describe.runIf(Boolean(databaseUrl))('fiscal document registry', () => {
     });
     expect(response.statusCode, response.body).toBe(200);
     expect(response.json()).toMatchObject({
-      tenant: { isDemo: true, demoSeedVersion: 9 },
+      tenant: { isDemo: true, demoSeedVersion: 10 },
       summary: { received: 1, validated: 0, rejected: 0, linkedTitles: 0 },
       documents: [{
         id: documentId, contractReference: 'CV-2026-0042', documentNumber: 'NFE-DEMO-0001',
@@ -70,6 +71,8 @@ describe.runIf(Boolean(databaseUrl))('fiscal document registry', () => {
       configurations: [{ version: 1, status: 'DRAFT', cfop: null,
         roundingMode: null, roundingScale: null, taxComponents: [] }],
       calculations: [],
+      authorities: [{ legalName: 'Autoridade fiscal estadual — Dado fictício', jurisdiction: 'STATE', uf: 'GO' }],
+      obligations: [],
       taxCalculation: { status: 'BLOCKED_CONFIGURATION', activeConfigurationCount: 0 },
     });
   });
@@ -102,7 +105,7 @@ describe.runIf(Boolean(databaseUrl))('fiscal document registry', () => {
         effectiveFrom: '2026-10-01', effectiveTo: null,
         roundingMode: 'HALF_UP', roundingScale: 2,
         taxComponents: [
-          { tax: 'ICMS', treatment: 'TAXED', basis: 'DOCUMENT_TOTAL', ratePct: '7.000000', retained: false },
+          { tax: 'ICMS', treatment: 'TAXED', basis: 'DOCUMENT_TOTAL', ratePct: '7.000000', retained: true },
           { tax: 'PIS', treatment: 'SUSPENDED', basis: 'DOCUMENT_TOTAL', ratePct: null, retained: false },
         ],
       },
@@ -124,7 +127,7 @@ describe.runIf(Boolean(databaseUrl))('fiscal document registry', () => {
     expect(body.configurations.find((item: { id: string }) => item.id === configurationId)).toMatchObject({
       id: configurationId, status: 'ACTIVE', version: 1, cfop: '6102',
       roundingMode: 'HALF_UP', roundingScale: 2,
-      taxComponents: [{ tax: 'ICMS', treatment: 'TAXED', basis: 'DOCUMENT_TOTAL', ratePct: '7.000000', retained: false },
+      taxComponents: [{ tax: 'ICMS', treatment: 'TAXED', basis: 'DOCUMENT_TOTAL', ratePct: '7.000000', retained: true },
         { tax: 'PIS', treatment: 'SUSPENDED', basis: 'DOCUMENT_TOTAL', ratePct: null, retained: false }],
     });
 
@@ -142,7 +145,7 @@ describe.runIf(Boolean(databaseUrl))('fiscal document registry', () => {
       requestKey: calculationPayload.requestKey,
       configuration: { id: configurationId, version: 1 },
       result: {
-        grossAmount: '45000', taxTotal: '3150.00', retainedTotal: '0.00', netAmount: '45000.00',
+        grossAmount: '45000', taxTotal: '3150.00', retainedTotal: '3150.00', netAmount: '41850.00',
         rounding: { mode: 'HALF_UP', scale: 2 },
         components: [
           { tax: 'ICMS', taxableBase: '45000', ratePct: '7.000000', amount: '3150.00' },
@@ -171,8 +174,81 @@ describe.runIf(Boolean(databaseUrl))('fiscal document registry', () => {
     const calculatedWorkspace = await server.inject({ method: 'GET', url: '/v1/fiscal', headers });
     expect(calculatedWorkspace.json().calculations).toMatchObject([{
       id: calculation.json().id, configuration: { version: 1 },
-      taxTotal: '3150.000000', retainedTotal: '0.000000', netAmount: '45000.000000',
+      taxTotal: '3150.000000', retainedTotal: '3150.000000', netAmount: '41850.000000',
     }]);
+
+    const acceptancePayload = {
+      requestKey: 'e7000000-0000-4000-8000-000000000010',
+      obligations: [{
+        tax: 'ICMS', authorityId: 'e8000000-0000-4000-8000-000000000001',
+        competenceDate: '2026-10-02', dueDate: '2026-10-12', titleEffect: 'NONE',
+        paymentResponsibility: 'TENANT', titleNumber: 'TF-ICMS-0001',
+        documentReference: 'CALCULO-45000',
+      }],
+    };
+    const accepted = await server.inject({
+      method: 'POST', url: `/v1/fiscal/calculations/${calculation.json().id}/accept`,
+      headers, payload: acceptancePayload,
+    });
+    expect(accepted.statusCode, accepted.body).toBe(201);
+    expect(accepted.json()).toMatchObject({ status: 'ACCEPTED', idempotent: false });
+    const acceptedAgain = await server.inject({
+      method: 'POST', url: `/v1/fiscal/calculations/${calculation.json().id}/accept`,
+      headers, payload: acceptancePayload,
+    });
+    expect(acceptedAgain.statusCode, acceptedAgain.body).toBe(201);
+    expect(acceptedAgain.json()).toMatchObject({ status: 'ACCEPTED', idempotent: true });
+
+    const linkedCalculation = await server.inject({
+      method: 'POST', url: '/v1/fiscal/calculations', headers,
+      payload: {
+        ...calculationPayload, requestKey: 'e7000000-0000-4000-8000-000000000003',
+        grossAmount: '11360.00', sourceType: 'FINANCIAL_EVENT',
+        sourceId: 'e0000000-0000-4000-8000-000000000001',
+      },
+    });
+    expect(linkedCalculation.statusCode, linkedCalculation.body).toBe(201);
+    expect(linkedCalculation.json()).toMatchObject({
+      result: { taxTotal: '795.20', retainedTotal: '795.20', netAmount: '10564.80' },
+    });
+    const acceptedLinked = await server.inject({
+      method: 'POST', url: `/v1/fiscal/calculations/${linkedCalculation.json().id}/accept`, headers,
+      payload: {
+        requestKey: 'e7000000-0000-4000-8000-000000000011',
+        obligations: [{
+          tax: 'ICMS', authorityId: 'e8000000-0000-4000-8000-000000000001',
+          competenceDate: '2026-10-02', dueDate: '2026-10-12',
+          titleEffect: 'REDUCE_SOURCE_TITLE', paymentResponsibility: 'TENANT',
+          titleNumber: 'TF-ICMS-0002', documentReference: 'NFE-DEMO-0001',
+        }],
+      },
+    });
+    expect(acceptedLinked.statusCode, acceptedLinked.body).toBe(201);
+
+    const obligationsWorkspace = await server.inject({ method: 'GET', url: '/v1/fiscal', headers });
+    expect(obligationsWorkspace.json()).toMatchObject({
+      summary: { openObligations: 2, taxPayables: 2 },
+      obligations: expect.arrayContaining([
+        expect.objectContaining({ tax: 'ICMS', amount: '3150.000000',
+          payable: expect.objectContaining({ titleNumber: 'TF-ICMS-0001' }) }),
+        expect.objectContaining({ tax: 'ICMS', amount: '795.200000',
+          payable: expect.objectContaining({ titleNumber: 'TF-ICMS-0002' }),
+          titleAdjustment: expect.objectContaining({ titleId: expect.any(String) }) }),
+      ]),
+    });
+    const financeWorkspace = await server.inject({ method: 'GET', url: '/v1/finance', headers });
+    expect(financeWorkspace.json()).toMatchObject({
+      summary: { receivableAmount: '6564.80', payableAmount: '3945.20' },
+    });
+    const settleAdjustedTitle = await server.inject({
+      method: 'POST', url: '/v1/finance/titles/e1000000-0000-4000-8000-000000000001/settlements', headers,
+      payload: {
+        amount: '6564.80', receivedAt: '2026-10-02T18:00:00-03:00',
+        bankReference: 'FISCAL-NET-BALANCE-TEST', notes: 'Liquidação do saldo após retenção.',
+      },
+    });
+    expect(settleAdjustedTitle.statusCode, settleAdjustedTitle.body).toBe(201);
+    expect(settleAdjustedTitle.json()).toMatchObject({ status: 'SETTLED', outstandingAmount: '0.00' });
 
     const version = await server.inject({
       method: 'POST', url: `/v1/fiscal/configurations/${configurationId}/new-version`, headers,

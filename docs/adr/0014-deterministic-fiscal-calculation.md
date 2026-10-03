@@ -16,5 +16,5 @@ Cada execução recebe `requestKey`, persiste entrada e resultado como snapshots
 
 - alterações futuras criam nova versão e não reescrevem cálculos anteriores;
 - bases ou fórmulas adicionais exigirão ampliação explícita e testes de homologação;
-- o cálculo ainda não cria obrigação tributária, altera título financeiro ou publica lançamento contábil;
+- o cálculo permanece sem efeitos até aceite explícito; obrigações e efeitos financeiros são tratados pelo ADR 0015;
 - alíquotas e tratamentos permanecem dados homologados pelo tenant, não constantes do sistema.

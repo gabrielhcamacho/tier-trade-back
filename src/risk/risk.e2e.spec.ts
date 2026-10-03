@@ -35,6 +35,7 @@ describe.runIf(Boolean(databaseUrl))('risk position', () => {
       '20261003000202_cover_fiscal_source_foreign_key.sql',
       '20261003003904_fiscal_configuration_catalog.sql',
       '20261003011929_fiscal_calculation_engine.sql',
+      '20261003014022_fiscal_obligations_and_financial_effects.sql',
     ];
     for (const migration of migrations) {
       await setup.query(await readFile(new URL(`../../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
@@ -61,7 +62,7 @@ describe.runIf(Boolean(databaseUrl))('risk position', () => {
     });
     expect(response.statusCode, response.body).toBe(200);
     expect(response.json()).toMatchObject({
-      tenant: { isDemo: true, demoSeedVersion: 9 },
+      tenant: { isDemo: true, demoSeedVersion: 10 },
       positions: [{
         commodity: 'MILHO',
         physical: {

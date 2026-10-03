@@ -3,8 +3,10 @@ import Decimal from 'decimal.js';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { DatabasePlatformPort } from '../database/database.js';
+import { FinancialProjectionPort } from '../finance/finance.port.js';
 import type {
-  CreateFiscalCalculationInput, CreateFiscalConfigurationInput, CreateFiscalDocumentInput, CreateFiscalEstablishmentInput,
+  AcceptFiscalCalculationInput, CreateFiscalAuthorityInput, CreateFiscalCalculationInput,
+  CreateFiscalConfigurationInput, CreateFiscalDocumentInput, CreateFiscalEstablishmentInput,
   RejectFiscalDocumentInput, UpdateFiscalConfigurationInput, UpdateFiscalDocumentInput,
 } from './fiscal.schemas.js';
 import { taxComponentSchema } from './fiscal.schemas.js';
@@ -42,11 +44,30 @@ type FiscalCalculationRow = {
   occurred_on: string; source_type: string; source_id: string | null; currency: string;
   gross_amount: string; tax_total: string; retained_total: string; net_amount: string;
   input_snapshot: unknown; result_snapshot: unknown; calculated_by: string; calculated_at: Date;
+  status: 'CALCULATED' | 'ACCEPTED'; acceptance_request_key: string | null;
+  acceptance_snapshot: unknown | null; accepted_by: string | null; accepted_at: Date | null;
+};
+
+type FiscalAuthorityRow = {
+  id: string; legal_name: string; tax_id: string | null;
+  jurisdiction: 'FEDERAL' | 'STATE' | 'MUNICIPAL'; uf: string | null;
+  active: boolean; updated_at: Date;
+};
+
+type FiscalObligationRow = {
+  id: string; calculation_id: string; component_tax: string; authority_id: string;
+  authority_name: string; competence_date: string; due_date: string; amount: string;
+  currency: string; retained: boolean; title_effect: string; payment_responsibility: string;
+  status: string; created_at: Date; payable_event_id: string | null; payable_title_id: string | null;
+  payable_title_number: string | null; adjustment_id: string | null; adjusted_title_id: string | null;
 };
 
 @Injectable()
 export class FiscalService {
-  constructor(@Inject(DatabasePlatformPort) private readonly db: DatabasePlatformPort) {}
+  constructor(
+    @Inject(DatabasePlatformPort) private readonly db: DatabasePlatformPort,
+    @Inject(FinancialProjectionPort) private readonly finance: FinancialProjectionPort,
+  ) {}
 
   workspace(tenantId: string, actorId: string) {
     return this.db.transaction(tenantId, async (client) => {
@@ -113,13 +134,54 @@ export class FiscalService {
                 fc.name AS configuration_name,c.establishment_id,fe.legal_name AS establishment_name,
                 c.operation_type,c.commodity,c.destination_uf,c.occurred_on::text,c.source_type,
                 c.source_id,c.currency,c.gross_amount::text,c.tax_total::text,c.retained_total::text,
-                c.net_amount::text,c.input_snapshot,c.result_snapshot,c.calculated_by,c.calculated_at
+                c.net_amount::text,c.input_snapshot,c.result_snapshot,c.calculated_by,c.calculated_at,
+                c.status,c.acceptance_request_key,c.acceptance_snapshot,c.accepted_by,c.accepted_at
            FROM app.fiscal_calculations c
            JOIN app.fiscal_configuration_versions fc
              ON (fc.tenant_id,fc.id)=(c.tenant_id,c.configuration_id)
            JOIN app.fiscal_establishments fe
              ON (fe.tenant_id,fe.id)=(c.tenant_id,c.establishment_id)
           WHERE c.tenant_id=$1 ORDER BY c.calculated_at DESC,c.id DESC LIMIT 20`, [tenantId]);
+      const authorities = await client.query<FiscalAuthorityRow>(
+        `SELECT id,legal_name,tax_id,jurisdiction,uf,active,updated_at
+           FROM app.fiscal_authorities
+          WHERE tenant_id=$1 ORDER BY active DESC,jurisdiction,legal_name,id`, [tenantId]);
+      const obligations = await client.query<FiscalObligationRow>(
+        `SELECT fo.id,fo.calculation_id,fo.component_tax,fo.authority_id,
+                fa.legal_name AS authority_name,fo.competence_date::text,fo.due_date::text,
+                fo.amount::text,fo.currency,fo.retained,fo.title_effect,
+                fo.payment_responsibility,fo.status,fo.created_at,
+                pfe.id AS payable_event_id,pft.id AS payable_title_id,
+                pft.title_number AS payable_title_number,fta.id AS adjustment_id,
+                fta.title_id AS adjusted_title_id
+           FROM app.fiscal_obligations fo
+           JOIN app.fiscal_authorities fa
+             ON (fa.tenant_id,fa.id)=(fo.tenant_id,fo.authority_id)
+           LEFT JOIN app.financial_events pfe
+             ON (pfe.tenant_id,pfe.fiscal_obligation_id)=(fo.tenant_id,fo.id)
+           LEFT JOIN app.financial_titles pft
+             ON (pft.tenant_id,pft.financial_event_id)=(pfe.tenant_id,pfe.id)
+           LEFT JOIN app.financial_title_adjustments fta
+             ON (fta.tenant_id,fta.fiscal_obligation_id)=(fo.tenant_id,fo.id)
+          WHERE fo.tenant_id=$1 ORDER BY fo.due_date,fo.created_at,fo.id`, [tenantId]);
+      const calculationSources = await client.query<{
+        id: string; reference: string; beneficiary_name: string; calculated_amount: string;
+      }>(
+        `SELECT fe.id,COALESCE(sc.reference,d.document_reference,fe.id::text) AS reference,
+                COALESCE(cp.legal_name,fa.legal_name) AS beneficiary_name,
+                fe.calculated_amount::text
+           FROM app.financial_events fe
+           LEFT JOIN app.sales_contracts sc
+             ON (sc.tenant_id,sc.id)=(fe.tenant_id,fe.sales_contract_id)
+           LEFT JOIN app.counterparties cp
+             ON (cp.tenant_id,cp.id)=(fe.tenant_id,fe.counterparty_id)
+           LEFT JOIN app.fiscal_authorities fa
+             ON (fa.tenant_id,fa.id)=(fe.tenant_id,fe.fiscal_authority_id)
+           LEFT JOIN app.inventory_dispatches d
+             ON (d.tenant_id,d.id)=(fe.tenant_id,fe.inventory_dispatch_id)
+          WHERE fe.tenant_id=$1 AND fe.calculation_status='READY'
+            AND fe.direction='INFLOW' AND fe.calculated_amount IS NOT NULL
+          ORDER BY fe.created_at DESC,fe.id DESC`, [tenantId]);
       const mapped = documents.rows.map((row) => this.mapDocument(row));
       const mappedConfigurations = configurations.rows.map((row) => this.mapConfiguration(row));
       const activeConfigurations = mappedConfigurations.filter((configuration) => configuration.status === 'ACTIVE');
@@ -135,6 +197,8 @@ export class FiscalService {
           validated: mapped.filter((document) => document.status === 'VALIDATED').length,
           rejected: mapped.filter((document) => document.status === 'REJECTED').length,
           linkedTitles: mapped.filter((document) => document.title !== null).length,
+          openObligations: obligations.rows.filter((obligation) => obligation.status === 'OPEN').length,
+          taxPayables: obligations.rows.filter((obligation) => obligation.payable_title_id !== null).length,
         },
         documents: mapped,
         establishments: establishments.rows.map((row) => ({
@@ -144,11 +208,35 @@ export class FiscalService {
         })),
         configurations: mappedConfigurations,
         calculations: calculations.rows.map((row) => this.mapCalculation(row)),
+        authorities: authorities.rows.map((row) => ({
+          id: row.id, legalName: row.legal_name, taxId: row.tax_id,
+          jurisdiction: row.jurisdiction, uf: row.uf, active: row.active,
+          updatedAt: row.updated_at.toISOString(),
+        })),
+        obligations: obligations.rows.map((row) => ({
+          id: row.id, calculationId: row.calculation_id, tax: row.component_tax,
+          authority: { id: row.authority_id, name: row.authority_name },
+          competenceDate: row.competence_date, dueDate: row.due_date, amount: row.amount,
+          currency: row.currency, retained: row.retained, titleEffect: row.title_effect,
+          paymentResponsibility: row.payment_responsibility, status: row.status,
+          createdAt: row.created_at.toISOString(),
+          payable: row.payable_event_id ? {
+            eventId: row.payable_event_id, titleId: row.payable_title_id,
+            titleNumber: row.payable_title_number,
+          } : null,
+          titleAdjustment: row.adjustment_id ? {
+            id: row.adjustment_id, titleId: row.adjusted_title_id,
+          } : null,
+        })),
         eligibleEvents: eligible.rows.map((row) => ({
           id: row.id, sourceId: row.source_id, salesContractId: row.sales_contract_id,
           contractReference: row.contract_reference, counterpartyName: row.counterparty_name,
           dispatchReference: row.dispatch_reference, expectedAmount: row.calculated_amount,
           calculationStatus: row.calculation_status,
+        })),
+        calculationSources: calculationSources.rows.map((row) => ({
+          id: row.id, reference: row.reference, beneficiaryName: row.beneficiary_name,
+          amount: row.calculated_amount,
         })),
         taxCalculation: {
           status: activeConfigurations.length ? 'READY' : 'BLOCKED_CONFIGURATION',
@@ -206,6 +294,29 @@ export class FiscalService {
         'fiscal_establishment', establishmentId,
         { taxId: input.taxId, uf: input.uf, taxRegime: input.taxRegime });
       return { id: establishmentId };
+    });
+  }
+
+  createAuthority(tenantId: string, actorId: string, input: CreateFiscalAuthorityInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'FISCAL_EDIT');
+      const id = randomUUID();
+      try {
+        await client.query(
+          `INSERT INTO app.fiscal_authorities
+            (tenant_id,id,legal_name,tax_id,jurisdiction,uf,created_by,updated_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$7)`,
+          [tenantId, id, input.legalName, input.taxId, input.jurisdiction, input.uf, actorId],
+        );
+      } catch (error) {
+        if (isUniqueViolation(error)) {
+          throw new ConflictException({ code: 'FISCAL_AUTHORITY_ALREADY_EXISTS' });
+        }
+        throw error;
+      }
+      await this.record(client, tenantId, actorId, 'fiscal.authority_created',
+        'fiscal_authority', id, input);
+      return { id, active: true, ...input };
     });
   }
 
@@ -343,6 +454,26 @@ export class FiscalService {
         return this.mapCalculation(existing);
       }
 
+      if (input.sourceType === 'FINANCIAL_EVENT') {
+        const source = await client.query<{
+          event_type: string; calculation_status: string; calculated_amount: string | null;
+        }>(
+          `SELECT event_type,calculation_status,calculated_amount::text
+             FROM app.financial_events
+            WHERE tenant_id=$1 AND id=$2`, [tenantId, input.sourceId]);
+        if (!source.rows[0]) throw new NotFoundException({ code: 'FINANCIAL_EVENT_NOT_FOUND' });
+        if (source.rows[0].event_type !== 'SALE_DISPATCH_RECEIVABLE'
+          || source.rows[0].calculation_status !== 'READY' || !source.rows[0].calculated_amount) {
+          throw new ConflictException({ code: 'FISCAL_CALCULATION_SOURCE_NOT_READY' });
+        }
+        if (!new Decimal(source.rows[0].calculated_amount).equals(input.grossAmount)) {
+          throw new UnprocessableEntityException({
+            code: 'FISCAL_CALCULATION_SOURCE_AMOUNT_MISMATCH',
+            sourceAmount: source.rows[0].calculated_amount,
+          });
+        }
+      }
+
       const selected = await client.query<FiscalConfigurationRow>(
         `SELECT fc.id,fc.configuration_key,fc.version,fc.establishment_id,
                 fe.legal_name AS establishment_name,fe.uf AS establishment_uf,fe.tax_regime,
@@ -418,8 +549,124 @@ export class FiscalService {
           name: configuration.name,
         },
         establishment: { id: input.establishmentId, name: configuration.establishment_name! },
-        context: inputSnapshot, result: memory,
+        context: inputSnapshot, result: memory, status: 'CALCULATED', acceptance: null,
       };
+    });
+  }
+
+  acceptCalculation(tenantId: string, actorId: string, calculationId: string,
+    input: AcceptFiscalCalculationInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'FISCAL_EDIT');
+      await this.assertCapability(client, tenantId, actorId, 'FINANCE_EDIT');
+      const normalized = {
+        obligations: [...input.obligations].sort((left, right) => left.tax.localeCompare(right.tax)),
+      };
+      const calculation = await client.query<{
+        status: string; acceptance_request_key: string | null; acceptance_snapshot: unknown | null;
+        input_snapshot: unknown; result_snapshot: unknown;
+      }>(
+        `SELECT status,acceptance_request_key,acceptance_snapshot,input_snapshot,result_snapshot
+           FROM app.fiscal_calculations
+          WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenantId, calculationId]);
+      if (!calculation.rows[0]) {
+        throw new NotFoundException({ code: 'FISCAL_CALCULATION_NOT_FOUND' });
+      }
+      if (calculation.rows[0].status === 'ACCEPTED') {
+        const comparison = await client.query<{ matches: boolean }>(
+          `SELECT acceptance_request_key=$3 AND acceptance_snapshot=$4::jsonb AS matches
+             FROM app.fiscal_calculations WHERE tenant_id=$1 AND id=$2`,
+          [tenantId, calculationId, input.requestKey, JSON.stringify(normalized)],
+        );
+        if (!comparison.rows[0]?.matches) {
+          throw new ConflictException({ code: 'FISCAL_CALCULATION_ALREADY_ACCEPTED' });
+        }
+        return { id: calculationId, status: 'ACCEPTED', idempotent: true };
+      }
+
+      const context = calculation.rows[0].input_snapshot as {
+        sourceType?: string; sourceId?: string | null;
+      };
+      const memory = calculation.rows[0].result_snapshot as {
+        components?: Array<{ tax: string; amount: string; retained: boolean }>;
+      };
+      if (!Array.isArray(memory.components)) {
+        throw new ConflictException({ code: 'FISCAL_CALCULATION_MEMORY_INVALID' });
+      }
+      const components = memory.components.filter((component) => new Decimal(component.amount).greaterThan(0));
+      const expectedTaxes = components.map((component) => component.tax).sort();
+      const informedTaxes = normalized.obligations.map((obligation) => obligation.tax).sort();
+      if (JSON.stringify(expectedTaxes) !== JSON.stringify(informedTaxes)) {
+        throw new UnprocessableEntityException({ code: 'FISCAL_OBLIGATION_COMPONENTS_MISMATCH' });
+      }
+
+      const authorityIds = [...new Set(normalized.obligations.map((obligation) => obligation.authorityId))];
+      const authorities = await client.query<{ id: string; legal_name: string }>(
+        `SELECT id,legal_name FROM app.fiscal_authorities
+          WHERE tenant_id=$1 AND active=true AND id=ANY($2::uuid[])`, [tenantId, authorityIds]);
+      if (authorities.rowCount !== authorityIds.length) {
+        throw new NotFoundException({ code: 'FISCAL_AUTHORITY_NOT_FOUND' });
+      }
+      const authorityNames = new Map(authorities.rows.map((authority) => [authority.id, authority.legal_name]));
+      const effects = [];
+      for (const obligationInput of normalized.obligations) {
+        const component = components.find((candidate) => candidate.tax === obligationInput.tax)!;
+        if (obligationInput.titleEffect === 'REDUCE_SOURCE_TITLE' && !component.retained) {
+          throw new UnprocessableEntityException({ code: 'FISCAL_TITLE_REDUCTION_REQUIRES_RETENTION' });
+        }
+        if (obligationInput.titleEffect === 'REDUCE_SOURCE_TITLE'
+          && (context.sourceType !== 'FINANCIAL_EVENT' || !context.sourceId)) {
+          throw new ConflictException({ code: 'FISCAL_SOURCE_TITLE_REQUIRED' });
+        }
+        const obligationId = randomUUID();
+        await client.query(
+          `INSERT INTO app.fiscal_obligations
+            (tenant_id,id,calculation_id,component_tax,authority_id,competence_date,due_date,
+             amount,currency,retained,title_effect,payment_responsibility,created_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'BRL',$9,$10,$11,$12)`,
+          [tenantId, obligationId, calculationId, obligationInput.tax, obligationInput.authorityId,
+            obligationInput.competenceDate, obligationInput.dueDate, component.amount,
+            component.retained, obligationInput.titleEffect,
+            obligationInput.paymentResponsibility, actorId],
+        );
+        const effect = await this.finance.applyFiscalObligation(client, {
+          tenantId, actorId, obligationId,
+          sourceFinancialEventId: context.sourceType === 'FINANCIAL_EVENT' ? context.sourceId ?? null : null,
+          authorityId: obligationInput.authorityId,
+          authorityName: authorityNames.get(obligationInput.authorityId)!,
+          tax: obligationInput.tax, amount: component.amount,
+          competenceDate: obligationInput.competenceDate, dueDate: obligationInput.dueDate,
+          titleEffect: obligationInput.titleEffect,
+          paymentResponsibility: obligationInput.paymentResponsibility,
+          titleNumber: obligationInput.titleNumber,
+          documentReference: obligationInput.documentReference,
+        });
+        effects.push({ obligationId, tax: obligationInput.tax, ...effect });
+        await this.record(client, tenantId, actorId, 'fiscal.obligation_confirmed',
+          'fiscal_obligation', obligationId, {
+            calculationId, tax: obligationInput.tax, authorityId: obligationInput.authorityId,
+            competenceDate: obligationInput.competenceDate, dueDate: obligationInput.dueDate,
+            amount: component.amount, retained: component.retained,
+            titleEffect: obligationInput.titleEffect,
+            paymentResponsibility: obligationInput.paymentResponsibility,
+          });
+      }
+      const updated = await client.query(
+        `UPDATE app.fiscal_calculations
+            SET status='ACCEPTED',acceptance_request_key=$3,acceptance_snapshot=$4::jsonb,
+                accepted_by=$5,accepted_at=now()
+          WHERE tenant_id=$1 AND id=$2 AND status='CALCULATED'`,
+        [tenantId, calculationId, input.requestKey, JSON.stringify(normalized), actorId],
+      );
+      if (updated.rowCount !== 1) {
+        throw new ConflictException({ code: 'FISCAL_CALCULATION_ALREADY_ACCEPTED' });
+      }
+      await this.record(client, tenantId, actorId, 'fiscal.calculation_accepted',
+        'fiscal_calculation', calculationId, {
+          requestKey: input.requestKey, obligationCount: effects.length,
+          obligations: effects,
+        });
+      return { id: calculationId, status: 'ACCEPTED', idempotent: false, obligations: effects };
     });
   }
 
@@ -565,6 +812,11 @@ export class FiscalService {
       establishment: { id: row.establishment_id, name: row.establishment_name },
       context: row.input_snapshot,
       result: row.result_snapshot,
+      status: row.status,
+      acceptance: row.status === 'ACCEPTED' ? {
+        requestKey: row.acceptance_request_key!, snapshot: row.acceptance_snapshot,
+        acceptedBy: row.accepted_by!, acceptedAt: row.accepted_at!.toISOString(),
+      } : null,
       operationType: row.operation_type, commodity: row.commodity,
       destinationUf: row.destination_uf, occurredOn: row.occurred_on,
       sourceType: row.source_type, sourceId: row.source_id, currency: row.currency,
@@ -638,7 +890,8 @@ export class FiscalService {
               fc.name AS configuration_name,c.establishment_id,fe.legal_name AS establishment_name,
               c.operation_type,c.commodity,c.destination_uf,c.occurred_on::text,c.source_type,
               c.source_id,c.currency,c.gross_amount::text,c.tax_total::text,c.retained_total::text,
-              c.net_amount::text,c.input_snapshot,c.result_snapshot,c.calculated_by,c.calculated_at
+              c.net_amount::text,c.input_snapshot,c.result_snapshot,c.calculated_by,c.calculated_at,
+              c.status,c.acceptance_request_key,c.acceptance_snapshot,c.accepted_by,c.accepted_at
          FROM app.fiscal_calculations c
          JOIN app.fiscal_configuration_versions fc
            ON (fc.tenant_id,fc.id)=(c.tenant_id,c.configuration_id)

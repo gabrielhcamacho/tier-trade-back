@@ -22,6 +22,8 @@
 | `finance.title_issued` | financial_title | previsão pronta é vinculada a documento e vencimento | contas a receber |
 | `finance.receipt_recorded` | financial_settlement | baixa parcial ou total é confirmada | caixa, conciliação |
 | `finance.receipt_reversed` | financial_settlement | baixa é estornada com motivo | caixa, conciliação, auditoria |
+| `finance.title_adjusted` | financial_title_adjustment | retenção confirmada reduz o saldo do título comercial sem alterar seu valor original | contas a receber/pagar, auditoria |
+| `finance.tax_payable_projected` | financial_event | obrigação sob responsabilidade do tenant gera título separado em favor da autoridade | contas a pagar, caixa |
 | `fiscal.document_received` | fiscal_document | NF-e é vinculada à expedição e ao evento financeiro | validação fiscal, auditoria |
 | `fiscal.document_corrected` | fiscal_document | dados do documento são corrigidos e voltam à conferência | validação fiscal, financeiro |
 | `fiscal.document_validated` | fiscal_document | chave e valor são conferidos e o título é vinculado | financeiro, reconciliação |
@@ -33,6 +35,9 @@
 | `fiscal.configuration_activated` | fiscal_configuration | versão completa entra em vigência | motor tributário |
 | `fiscal.configuration_version_created` | fiscal_configuration | sucessora é clonada sem reescrever a versão anterior | homologação fiscal |
 | `fiscal.calculation_completed` | fiscal_calculation | contexto seleciona uma versão única e a memória é persistida | obrigações, financeiro, contabilidade |
+| `fiscal.authority_created` | fiscal_authority | autoridade favorecida pelo recolhimento é cadastrada | obrigações, financeiro |
+| `fiscal.obligation_confirmed` | fiscal_obligation | componente calculado recebe competência, vencimento, autoridade e responsabilidade | financeiro, agenda fiscal |
+| `fiscal.calculation_accepted` | fiscal_calculation | usuário confirma integralmente os efeitos dos componentes positivos | auditoria, contabilidade futura |
 
 Todos carregam `id`, `tenant_id`, tipo, agregado, payload mínimo e instante. A outbox é gravada na mesma transação da mudança. Publicação é pelo menos uma vez; consumidores deduplicam por `id`.
 
@@ -48,6 +53,7 @@ Todos carregam `id`, `tenant_id`, tipo, agregado, payload mínimo e instante. A 
 - a mesma transação da expedição cria o evento financeiro canônico; título e baixa continuam fatos posteriores e separados;
 - validação fiscal compara o total da NF-e ao evento financeiro; não calcula tributos e liga o título apenas quando não há divergência;
 - configurações fiscais ativas são imutáveis e o motor registra entrada, versão, bases, alíquotas, valores não arredondados, arredondamento e resultado;
+- o aceite fiscal cria obrigações e seus efeitos financeiros na mesma transação; a redução do título comercial e o título a pagar à autoridade são fatos separados;
 - `published_at` indica entrega aos consumidores internos atuais.
 - o worker expõe saúde em `/health/live` e `/health/ready` e métricas em `/metrics` na porta operacional própria;
 - falha, retentativa e recuperação geram logs JSON sem payload de negócio.
