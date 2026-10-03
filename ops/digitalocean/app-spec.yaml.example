@@ -61,46 +61,11 @@ services:
       - key: TIER_TRADE_PROCESS
         scope: RUN_TIME
         type: GENERAL
-        value: api
-      - key: DATABASE_POOL_MAX
+        value: combined
+      - key: NODE_OPTIONS
         scope: RUN_TIME
         type: GENERAL
-        value: "5"
-      - key: DATABASE_IDLE_TIMEOUT_MS
-        scope: RUN_TIME
-        type: GENERAL
-        value: "30000"
-      - key: DATABASE_CONNECTION_TIMEOUT_MS
-        scope: RUN_TIME
-        type: GENERAL
-        value: "10000"
-      - key: OTEL_SERVICE_NAME
-        scope: RUN_TIME
-        type: GENERAL
-        value: tier-trade-api
-workers:
-  - name: outbox-worker
-    github:
-      repo: gabrielhcamacho/tier-trade-back
-      branch: main
-      deploy_on_push: true
-    dockerfile_path: Dockerfile
-    source_dir: /
-    instance_count: 1
-    instance_size_slug: apps-s-1vcpu-0.5gb
-    liveness_health_check:
-      http_path: /health/live
-      port: 9464
-      initial_delay_seconds: 30
-      period_seconds: 10
-      timeout_seconds: 5
-      success_threshold: 1
-      failure_threshold: 3
-    envs:
-      - key: TIER_TRADE_PROCESS
-        scope: RUN_TIME
-        type: GENERAL
-        value: worker
+        value: --max-old-space-size=160
       - key: TENANT_ID
         scope: RUN_TIME
         type: GENERAL
@@ -117,6 +82,10 @@ workers:
         scope: RUN_TIME
         type: GENERAL
         value: "10000"
+      - key: OTEL_SERVICE_NAME
+        scope: RUN_TIME
+        type: GENERAL
+        value: tier-trade-api
       - key: OUTBOX_POLL_INTERVAL_MS
         scope: RUN_TIME
         type: GENERAL
@@ -133,7 +102,3 @@ workers:
         scope: RUN_TIME
         type: GENERAL
         value: "30000"
-      - key: OTEL_SERVICE_NAME
-        scope: RUN_TIME
-        type: GENERAL
-        value: tier-trade-outbox-worker

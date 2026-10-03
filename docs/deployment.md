@@ -11,6 +11,12 @@ A API e o dispatcher da outbox usam a mesma imagem OCI e processos distintos:
 - API: `TIER_TRADE_PROCESS=api`, porta `3001`, saúde em `GET /health/live` e prontidão em `GET /health/ready`;
 - worker: `TIER_TRADE_PROCESS=worker`, porta interna `9464`, saúde em `GET /health/live`, prontidão em `GET /health/ready` e métricas em `GET /metrics`.
 
+No piloto de baixo tráfego, `TIER_TRADE_PROCESS=combined` supervisiona os dois
+processos no mesmo container. Se qualquer processo encerrar, o supervisor
+encerra o outro e o App Platform reinicia o componente. A separação em dois
+componentes continua sendo o caminho de escala quando carga ou disponibilidade
+exigirem isolamento.
+
 O container executa o preflight obrigatório antes do processo, roda sem
 privilégios e não contém código-fonte, dependências de desenvolvimento ou
 segredos. O certificado público `certs/supabase-root-2021.crt` é incorporado à
@@ -23,9 +29,9 @@ modelo revisável e não deve ser enviada sem substituir os marcadores
 `SET_VIA_MCP_*`. A criação efetiva é feita pelo MCP autenticado do DigitalOcean,
 que envia os valores secretos diretamente ao App Platform.
 
-O MVP usa dois containers `apps-s-1vcpu-0.5gb`, um para cada componente. Antes
-de criar ou redimensionar recursos pagos, confirme o preço vigente no App
-Platform.
+O MVP usa um container `apps-s-1vcpu-0.5gb` no modo combinado. Isso preserva
+processos independentes com custo mínimo gerenciado. Antes de criar ou
+redimensionar recursos pagos, confirme o preço vigente no App Platform.
 
 ## Variáveis de runtime
 
@@ -38,11 +44,12 @@ Ambos os processos exigem:
 - `SUPABASE_SECRET_KEY` como segredo;
 - `WEB_ORIGIN` e `WEB_URL` com a URL HTTPS pública do frontend;
 - `DATABASE_POOL_MAX`, `DATABASE_IDLE_TIMEOUT_MS` e `DATABASE_CONNECTION_TIMEOUT_MS`;
-- `OTEL_SERVICE_NAME`.
+- `OTEL_SERVICE_NAME`;
+- `NODE_OPTIONS=--max-old-space-size=160` no plano de 512 MiB.
 
 `DATABASE_URL` deve conter `sslmode=verify-full` e
-`sslrootcert=/etc/ssl/certs/supabase-root-2021.crt`. Para o plano inicial, a API
-usa no máximo cinco conexões e o worker três, evitando consumir de forma
+`sslrootcert=/etc/ssl/certs/supabase-root-2021.crt`. Para o plano inicial, API
+e worker usam no máximo três conexões cada, evitando consumir de forma
 desnecessária o limite do pooler do Supabase.
 
 O worker também exige `TENANT_ID` e aceita os limites `OUTBOX_*` documentados em
@@ -69,8 +76,8 @@ lista final. A aplicação nunca executa migrations ao iniciar.
 1. CI verde e commit identificado.
 2. Backup/PITR verificados no Supabase.
 3. Migration compatível com a versão atual (`expand`).
-4. Deploy da API e validação de readiness.
-5. Deploy do worker e validação da sonda de vida.
+4. Deploy do componente combinado e validação de readiness da API.
+5. Validação dos logs de inicialização do worker.
 6. Configuração de `NEXT_PUBLIC_API_URL` no frontend e novo deploy na Vercel.
 7. Smoke test autenticado ponta a ponta.
 8. Alterações destrutivas de schema somente em promoção futura (`contract`).
