@@ -50,6 +50,16 @@ export class OperationsController {
     return this.service.occurrenceBoard(identity.tenantId, identity.actorId);
   }
 
+  @Get('operations/receiving')
+  receivingBoard(@Identity() identity: RequestIdentity) {
+    return this.service.receivingBoard(identity.tenantId, identity.actorId);
+  }
+
+  @Get('operations/quality')
+  qualityBoard(@Identity() identity: RequestIdentity) {
+    return this.service.qualityBoard(identity.tenantId, identity.actorId);
+  }
+
   @Get('loads/:loadId')
   detail(@Identity() identity: RequestIdentity,
     @Param('loadId', ParseUUIDPipe) loadId: string) {

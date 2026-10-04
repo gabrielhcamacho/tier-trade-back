@@ -106,6 +106,24 @@ interface ReceiptReportRow {
   created_at: Date;
 }
 
+interface OperationalBoardRow extends LoadRow {
+  timezone: string;
+  receipt_id: string | null;
+  receipt_version: number | null;
+  received_at: Date | null;
+  inbound_invoice_number: string | null;
+  document_weight_kg: string | null;
+  arrival_weight_kg: string | null;
+  considered_weight_kg: string | null;
+  accepted_weight_kg: string | null;
+  scale_ticket_number: string | null;
+  moisture_pct: string | null;
+  impurity_pct: string | null;
+  damaged_pct: string | null;
+  quality_decision: string | null;
+  open_occurrences: number;
+}
+
 @Injectable()
 export class OperationsService {
   constructor(
@@ -421,6 +439,47 @@ export class OperationsService {
     });
   }
 
+  receivingBoard(tenantId: string, actorId: string) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertMember(client, tenantId, actorId);
+      const items = await this.operationalBoardItems(client, tenantId);
+      const acceptedWeight = items.reduce(
+        (total, item) => total.plus(item.receipt?.acceptedWeightKg ?? 0), new Decimal(0),
+      );
+      return {
+        items,
+        summary: {
+          scheduled: items.filter((item) => item.status === 'SCHEDULED').length,
+          inReceiving: items.filter((item) => item.status === 'IN_RECEIVING').length,
+          received: items.filter((item) => item.status === 'RECEIVED').length,
+          acceptedWeightKg: acceptedWeight.toFixed(3),
+        },
+      };
+    });
+  }
+
+  qualityBoard(tenantId: string, actorId: string) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertMember(client, tenantId, actorId);
+      const items = await this.operationalBoardItems(client, tenantId);
+      const classified = items.filter((item) => item.receipt);
+      const average = (field: 'moisturePct' | 'impurityPct') => classified.length
+        ? classified.reduce((total, item) => total.plus(item.receipt?.[field] ?? 0), new Decimal(0))
+          .div(classified.length).toFixed(4)
+        : '0.0000';
+      return {
+        items,
+        summary: {
+          awaitingClassification: items.filter((item) => !item.receipt).length,
+          reviewRequired: items.filter((item) => item.receipt?.qualityDecision === 'REVIEW_REQUIRED').length,
+          accepted: items.filter((item) => item.receipt?.qualityDecision === 'ACCEPTED').length,
+          averageMoisturePct: average('moisturePct'),
+          averageImpurityPct: average('impurityPct'),
+        },
+      };
+    });
+  }
+
   loadDetail(tenantId: string, actorId: string, loadId: string) {
     return this.db.transaction(tenantId, async (client) => {
       await this.assertMember(client, tenantId, actorId);
@@ -502,6 +561,53 @@ export class OperationsService {
         })),
       };
     });
+  }
+
+  private async operationalBoardItems(client: PoolClient, tenantId: string) {
+    const result = await client.query<OperationalBoardRow>(
+      `SELECT l.id,l.contract_id,l.scheduled_at,l.expected_weight_kg,l.vehicle_plate,
+              l.carrier_name,l.destination_code,l.status,l.created_at,t.timezone,
+              r.id AS receipt_id,r.version AS receipt_version,r.received_at,
+              r.inbound_invoice_number,r.document_weight_kg,
+              (r.gross_weight_kg-r.tare_weight_kg)::text AS arrival_weight_kg,
+              r.considered_weight_kg,r.accepted_weight_kg,r.scale_ticket_number,
+              r.moisture_pct,r.impurity_pct,r.damaged_pct,r.quality_decision,
+              count(o.id) FILTER (WHERE o.status='OPEN')::int AS open_occurrences
+         FROM app.loads l
+         JOIN app.tenants t ON t.id=l.tenant_id
+         LEFT JOIN app.load_receipts r
+           ON (r.tenant_id,r.load_id)=(l.tenant_id,l.id) AND r.is_current=true
+         LEFT JOIN app.load_occurrences o
+           ON (o.tenant_id,o.load_id)=(l.tenant_id,l.id)
+        WHERE l.tenant_id=$1 AND l.status<>'CANCELLED'
+        GROUP BY l.tenant_id,l.id,t.timezone,r.id,r.version,r.received_at,
+                 r.inbound_invoice_number,r.document_weight_kg,r.gross_weight_kg,
+                 r.tare_weight_kg,r.considered_weight_kg,r.accepted_weight_kg,
+                 r.scale_ticket_number,r.moisture_pct,r.impurity_pct,r.damaged_pct,
+                 r.quality_decision
+        ORDER BY CASE l.status WHEN 'IN_RECEIVING' THEN 0 WHEN 'SCHEDULED' THEN 1 ELSE 2 END,
+                 l.scheduled_at,l.id`,
+      [tenantId],
+    );
+    return result.rows.map((row) => ({
+      ...this.presentLoad(row),
+      openOccurrences: row.open_occurrences,
+      receipt: row.receipt_id ? {
+        id: row.receipt_id,
+        version: row.receipt_version!,
+        receivedAt: row.received_at!.toISOString(),
+        inboundInvoiceNumber: row.inbound_invoice_number,
+        documentWeightKg: row.document_weight_kg,
+        arrivalWeightKg: row.arrival_weight_kg,
+        consideredWeightKg: row.considered_weight_kg,
+        acceptedWeightKg: row.accepted_weight_kg,
+        scaleTicketNumber: row.scale_ticket_number,
+        moisturePct: row.moisture_pct,
+        impurityPct: row.impurity_pct,
+        damagedPct: row.damaged_pct,
+        qualityDecision: row.quality_decision,
+      } : null,
+    }));
   }
 
   startReceiving(tenantId: string, actorId: string, loadId: string) {

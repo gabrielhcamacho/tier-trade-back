@@ -158,5 +158,20 @@ describe.runIf(Boolean(databaseUrl))('operations yard, occurrences and romaneio'
     expect(occurrenceBoard.json().items).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: occurrence.json().id, loadId, status: 'RESOLVED' }),
     ]));
+    const receivingBoard = await server.inject({ method: 'GET', url: '/v1/operations/receiving', headers });
+    expect(receivingBoard.statusCode, receivingBoard.body).toBe(200);
+    expect(receivingBoard.json().items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: loadId, status: 'RECEIVED', receipt: expect.objectContaining({
+        inboundInvoiceNumber: 'NF-TESTE-0045', acceptedWeightKg: '44990.000',
+      }) }),
+    ]));
+    const qualityBoard = await server.inject({ method: 'GET', url: '/v1/operations/quality', headers });
+    expect(qualityBoard.statusCode, qualityBoard.body).toBe(200);
+    expect(qualityBoard.json()).toMatchObject({
+      summary: { accepted: expect.any(Number), reviewRequired: expect.any(Number) },
+      items: expect.arrayContaining([expect.objectContaining({
+        id: loadId, receipt: expect.objectContaining({ qualityDecision: 'ACCEPTED', moisturePct: '13.5000' }),
+      })]),
+    });
   });
 });
