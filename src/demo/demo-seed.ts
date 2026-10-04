@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 
-export const DEMO_SEED_VERSION = 11;
+export const DEMO_SEED_VERSION = 12;
 
 export type ResetDemoTenantInput = {
   tenantId: string;
@@ -16,6 +16,9 @@ export type ResetDemoTenantResult = {
   contracts: number;
   loads: number;
   receipts: number;
+  yardEvents: number;
+  occurrences: number;
+  romaneios: number;
   inventoryLots: number;
   inventoryMovements: number;
   salesContracts: number;
@@ -78,6 +81,14 @@ const ids = {
     'd8000000-0000-4000-8000-000000000001',
     'd8000000-0000-4000-8000-000000000002',
   ],
+  yardEvents: [
+    'd8100000-0000-4000-8000-000000000001',
+    'd8100000-0000-4000-8000-000000000002',
+    'd8100000-0000-4000-8000-000000000003',
+    'd8100000-0000-4000-8000-000000000004',
+  ],
+  occurrence: 'd8200000-0000-4000-8000-000000000001',
+  romaneio: 'd8300000-0000-4000-8000-000000000001',
   inventory: {
     location: 'd9000000-0000-4000-8000-000000000001',
     lot: 'da000000-0000-4000-8000-000000000001',
@@ -158,6 +169,9 @@ export async function resetDemoTenant(
       contracts: ids.contracts.length,
       loads: ids.loads.length,
       receipts: ids.receipts.length,
+      yardEvents: ids.yardEvents.length,
+      occurrences: 1,
+      romaneios: 1,
       inventoryLots: 1,
       inventoryMovements: 2,
       salesContracts: 1,
@@ -189,6 +203,7 @@ async function clearOperationalData(client: PoolClient, tenantId: string, actorI
   await client.query('SELECT app.delete_demo_fiscal_configuration($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_sales_fulfillment($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_inventory($1,$2)', [tenantId, actorId]);
+  await client.query('SELECT app.delete_demo_operations_extensions($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_load_receipts($1,$2)', [tenantId, actorId]);
   for (const table of [
     'contract_summary_read_model',
@@ -309,6 +324,34 @@ async function seedOperationalData(client: PoolClient, input: ResetDemoTenantInp
        'MANUAL_CONTINGENCY',NULL,'Balança integrada indisponível durante o recebimento.',14.8000,2.4000,5.1000,
        'REVIEW_REQUIRED','Dado fictício aguardando decisão humana de qualidade.',$6,'2026-10-01T14:05:00Z')`,
     [tenantId, ...ids.receipts, ids.loads[0], ids.loads[1], actorId],
+  );
+  await client.query(
+    `INSERT INTO app.load_yard_events
+      (tenant_id,id,load_id,event_type,location_code,occurred_at,notes,created_by,created_at) VALUES
+      ($1,$2,$6,'CHECKED_IN','PORTARIA_01','2026-10-01T11:20:00Z',NULL,$7,'2026-10-01T11:20:00Z'),
+      ($1,$3,$6,'QUEUED','PATIO_A','2026-10-01T11:30:00Z',NULL,$7,'2026-10-01T11:30:00Z'),
+      ($1,$4,$6,'CALLED_TO_SCALE','BALANCA_01','2026-10-01T11:55:00Z',NULL,$7,'2026-10-01T11:55:00Z'),
+      ($1,$5,$6,'RELEASED','PORTARIA_01','2026-10-01T12:25:00Z','Carga liberada após aceite do recebimento.',$7,'2026-10-01T12:25:00Z')`,
+    [tenantId, ...ids.yardEvents, ids.loads[0], actorId],
+  );
+  await client.query(
+    `INSERT INTO app.load_occurrences
+      (tenant_id,id,load_id,category,severity,title,description,occurred_at,status,created_by,created_at,updated_at)
+     VALUES ($1,$2,$3,'QUALITY','WARNING','Divergência enviada para revisão',
+       'A classificação da carga permanece em revisão pelo responsável operacional.',
+       '2026-10-01T14:05:00Z','OPEN',$4,'2026-10-01T14:05:00Z','2026-10-01T14:05:00Z')`,
+    [tenantId, ids.occurrence, ids.loads[1], actorId],
+  );
+  await client.query(
+    `INSERT INTO app.load_receipt_reports
+      (tenant_id,id,load_id,receipt_id,reference,version,is_current,issued_at,
+       inbound_invoice_number,inbound_invoice_series,inbound_invoice_access_key,
+       document_weight_kg,arrival_weight_kg,considered_weight_kg,accepted_weight_kg,
+       scale_ticket_number,moisture_pct,impurity_pct,damaged_pct,created_by,created_at)
+     VALUES ($1,$2,$3,$4,'RM-ARMAZEM_GO_01-2026-00000001',1,true,'2026-10-01T12:20:00Z',
+       '102684','1',NULL,32920.000,32920.000,32920.000,32920.000,
+       'TB-2026-001',13.2000,1.1000,2.3000,$5,'2026-10-01T12:20:00Z')`,
+    [tenantId, ids.romaneio, ids.loads[0], ids.receipts[0], actorId],
   );
   await client.query(
     `INSERT INTO app.inventory_locations

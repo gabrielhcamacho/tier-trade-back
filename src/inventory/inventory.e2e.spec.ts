@@ -42,6 +42,7 @@ describe.runIf(Boolean(databaseUrl))('sales fulfillment and inventory ledger', (
       '20261004164744_sales_contract_versions.sql',
       '20261004221411_operations_receipt_document_weights.sql',
       '20261004224629_cover_sales_contract_version_recorder_fk.sql',
+      '20261004234000_operations_yard_occurrences_romaneio.sql',
     ];
     for (const migration of migrations) {
       await setup.query(await readFile(new URL(`../../supabase/migrations/${migration}`, import.meta.url), 'utf8'));

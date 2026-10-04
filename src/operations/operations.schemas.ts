@@ -74,3 +74,27 @@ export const recordLoadReceiptSchema = z.object({
 });
 
 export type RecordLoadReceiptInput = z.infer<typeof recordLoadReceiptSchema>;
+
+export const recordYardEventSchema = z.object({
+  eventType: z.enum(['QUEUED', 'CALLED_TO_SCALE', 'RELEASED', 'DEPARTED']),
+  occurredAt: z.iso.datetime({ offset: true }),
+  locationCode: z.string().trim().toUpperCase()
+    .pipe(z.string().regex(/^[A-Z0-9][A-Z0-9_-]{1,31}$/, 'Invalid yard location code.'))
+    .nullable(),
+  notes: z.string().trim().min(1).max(500).nullable(),
+});
+export type RecordYardEventInput = z.infer<typeof recordYardEventSchema>;
+
+export const createLoadOccurrenceSchema = z.object({
+  category: z.enum(['DOCUMENT', 'WEIGHT', 'QUALITY', 'VEHICLE', 'YARD', 'OTHER']),
+  severity: z.enum(['INFO', 'WARNING', 'CRITICAL']),
+  title: z.string().trim().min(3).max(120),
+  description: z.string().trim().min(10).max(1000),
+  occurredAt: z.iso.datetime({ offset: true }),
+});
+export type CreateLoadOccurrenceInput = z.infer<typeof createLoadOccurrenceSchema>;
+
+export const resolveLoadOccurrenceSchema = z.object({
+  resolution: z.string().trim().min(10).max(1000),
+});
+export type ResolveLoadOccurrenceInput = z.infer<typeof resolveLoadOccurrenceSchema>;

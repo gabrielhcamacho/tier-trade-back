@@ -16,12 +16,21 @@ Um usuário autorizado programa uma carga para um contrato ativo. O sistema inte
 - Auditoria e outbox `load.scheduled` na mesma transação.
 - Agenda por contrato e consulta do detalhe da carga.
 
+## Extensões já entregues
+
+- Check-in, fila de pátio, chamada para balança, liberação e saída em sequência auditável.
+- Pesagem bruta, tara, peso documental, de chegada, considerado e aceito sem tolerância presumida.
+- Classificação explícita e versionamento do recebimento.
+- Ocorrências operacionais com severidade, abertura e resolução preservadas na auditoria.
+- Romaneio operacional versionado e emitido somente a partir do recebimento aceito.
+- Entrada ou correção compensatória no livro de estoque.
+- Cancelamento ou reprogramação de carga.
+
 ## Fora desta entrega
 
-- Check-in, pesagem bruta, tara e peso líquido.
-- Classificação, descontos de qualidade e memória de cálculo.
-- Romaneio, estoque, documento fiscal e liquidação financeira.
-- Cancelamento ou reprogramação de carga.
+- Regra automática de descontos de qualidade, pendente de homologação do piloto.
+- Escrituração e validação fiscal da NF-e de entrada; o recebimento conserva apenas a referência operacional.
+- Liquidação financeira da compra.
 
 ## Contratos HTTP
 

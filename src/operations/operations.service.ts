@@ -4,7 +4,15 @@ import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { DatabasePlatformPort } from '../database/database.js';
 import { InventoryReceiptPort } from '../inventory/inventory.port.js';
-import type { CancelLoadInput, RecordLoadReceiptInput, RescheduleLoadInput, ScheduleLoadInput } from './operations.schemas.js';
+import type {
+  CancelLoadInput,
+  CreateLoadOccurrenceInput,
+  RecordLoadReceiptInput,
+  RecordYardEventInput,
+  RescheduleLoadInput,
+  ResolveLoadOccurrenceInput,
+  ScheduleLoadInput,
+} from './operations.schemas.js';
 
 interface ContractForScheduling {
   status: string;
@@ -51,6 +59,50 @@ interface ReceiptRow {
   damaged_pct: string;
   quality_decision: string;
   notes: string | null;
+  created_at: Date;
+}
+
+interface YardEventRow {
+  id: string;
+  event_type: string;
+  location_code: string | null;
+  occurred_at: Date;
+  notes: string | null;
+  created_at: Date;
+}
+
+interface OccurrenceRow {
+  id: string;
+  category: string;
+  severity: string;
+  title: string;
+  description: string;
+  occurred_at: Date;
+  status: string;
+  resolution: string | null;
+  resolved_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+interface ReceiptReportRow {
+  id: string;
+  receipt_id: string;
+  reference: string;
+  version: number;
+  is_current: boolean;
+  issued_at: Date;
+  inbound_invoice_number: string;
+  inbound_invoice_series: string;
+  inbound_invoice_access_key: string | null;
+  document_weight_kg: string;
+  arrival_weight_kg: string;
+  considered_weight_kg: string;
+  accepted_weight_kg: string;
+  scale_ticket_number: string | null;
+  moisture_pct: string;
+  impurity_pct: string;
+  damaged_pct: string;
   created_at: Date;
 }
 
@@ -282,6 +334,93 @@ export class OperationsService {
     });
   }
 
+  yardBoard(tenantId: string, actorId: string) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertMember(client, tenantId, actorId);
+      const result = await client.query<LoadRow & {
+        yard_state: string | null;
+        yard_occurred_at: Date | null;
+        yard_location_code: string | null;
+        open_occurrences: number;
+      }>(
+        `SELECT l.id,l.contract_id,l.scheduled_at,l.expected_weight_kg,l.vehicle_plate,
+                l.carrier_name,l.destination_code,l.status,l.created_at,t.timezone,
+                yard.event_type AS yard_state,yard.occurred_at AS yard_occurred_at,
+                yard.location_code AS yard_location_code,
+                count(o.id) FILTER (WHERE o.status='OPEN')::int AS open_occurrences
+           FROM app.loads l
+           JOIN app.tenants t ON t.id=l.tenant_id
+           LEFT JOIN LATERAL (
+             SELECT event_type,occurred_at,location_code FROM app.load_yard_events y
+              WHERE y.tenant_id=l.tenant_id AND y.load_id=l.id
+              ORDER BY occurred_at DESC,id DESC LIMIT 1
+           ) yard ON true
+           LEFT JOIN app.load_occurrences o
+             ON (o.tenant_id,o.load_id)=(l.tenant_id,l.id)
+          WHERE l.tenant_id=$1 AND l.status <> 'CANCELLED'
+          GROUP BY l.tenant_id,l.id,t.timezone,yard.event_type,yard.occurred_at,yard.location_code
+          ORDER BY CASE WHEN yard.event_type IS NULL THEN 0 WHEN yard.event_type='DEPARTED' THEN 2 ELSE 1 END,
+                   COALESCE(yard.occurred_at,l.scheduled_at),l.id`,
+        [tenantId],
+      );
+      const items = result.rows.map((row) => ({
+        ...this.presentLoad(row),
+        yardState: row.yard_state ?? 'NOT_ARRIVED',
+        yardOccurredAt: row.yard_occurred_at?.toISOString() ?? null,
+        yardLocationCode: row.yard_location_code,
+        openOccurrences: row.open_occurrences,
+      }));
+      return {
+        items,
+        summary: {
+          awaitingArrival: items.filter((item) => item.yardState === 'NOT_ARRIVED').length,
+          inYard: items.filter((item) => !['NOT_ARRIVED', 'DEPARTED'].includes(item.yardState)).length,
+          departed: items.filter((item) => item.yardState === 'DEPARTED').length,
+          openOccurrences: items.reduce((total, item) => total + item.openOccurrences, 0),
+        },
+      };
+    });
+  }
+
+  occurrenceBoard(tenantId: string, actorId: string) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertMember(client, tenantId, actorId);
+      const result = await client.query<OccurrenceRow & {
+        load_id: string;
+        vehicle_plate: string;
+        contract_id: string;
+        timezone: string;
+      }>(
+        `SELECT o.id,o.load_id,o.category,o.severity,o.title,o.description,o.occurred_at,
+                o.status,o.resolution,o.resolved_at,o.created_at,o.updated_at,
+                l.vehicle_plate,l.contract_id,t.timezone
+           FROM app.load_occurrences o
+           JOIN app.loads l ON (l.tenant_id,l.id)=(o.tenant_id,o.load_id)
+           JOIN app.tenants t ON t.id=o.tenant_id
+          WHERE o.tenant_id=$1
+          ORDER BY CASE o.status WHEN 'OPEN' THEN 0 ELSE 1 END,
+                   CASE o.severity WHEN 'CRITICAL' THEN 0 WHEN 'WARNING' THEN 1 ELSE 2 END,
+                   o.occurred_at DESC,o.id DESC`,
+        [tenantId],
+      );
+      const items = result.rows.map((row) => ({
+        ...this.presentOccurrence(row),
+        loadId: row.load_id,
+        vehiclePlate: row.vehicle_plate,
+        contractId: row.contract_id,
+        timezone: row.timezone,
+      }));
+      return {
+        items,
+        summary: {
+          open: items.filter((item) => item.status === 'OPEN').length,
+          critical: items.filter((item) => item.status === 'OPEN' && item.severity === 'CRITICAL').length,
+          resolved: items.filter((item) => item.status === 'RESOLVED').length,
+        },
+      };
+    });
+  }
+
   loadDetail(tenantId: string, actorId: string, loadId: string) {
     return this.db.transaction(tenantId, async (client) => {
       await this.assertMember(client, tenantId, actorId);
@@ -304,6 +443,31 @@ export class OperationsService {
           ORDER BY version DESC`,
         [tenantId, loadId],
       );
+      const yardEvents = await client.query<YardEventRow>(
+        `SELECT id,event_type,location_code,occurred_at,notes,created_at
+           FROM app.load_yard_events
+          WHERE tenant_id=$1 AND load_id=$2
+          ORDER BY occurred_at,id`,
+        [tenantId, loadId],
+      );
+      const occurrences = await client.query<OccurrenceRow>(
+        `SELECT id,category,severity,title,description,occurred_at,status,resolution,
+                resolved_at,created_at,updated_at
+           FROM app.load_occurrences
+          WHERE tenant_id=$1 AND load_id=$2
+          ORDER BY CASE status WHEN 'OPEN' THEN 0 ELSE 1 END,occurred_at DESC,id DESC`,
+        [tenantId, loadId],
+      );
+      const reports = await client.query<ReceiptReportRow>(
+        `SELECT id,receipt_id,reference,version,is_current,issued_at,inbound_invoice_number,
+                inbound_invoice_series,inbound_invoice_access_key,document_weight_kg,
+                arrival_weight_kg,considered_weight_kg,accepted_weight_kg,scale_ticket_number,
+                moisture_pct,impurity_pct,damaged_pct,created_at
+           FROM app.load_receipt_reports
+          WHERE tenant_id=$1 AND load_id=$2
+          ORDER BY version DESC`,
+        [tenantId, loadId],
+      );
       const receiptHistory = receipts.rows.map((row) => this.presentReceipt(row));
       const audit = await client.query<{ event_type: string; payload: Record<string, unknown>; occurred_at: Date }>(
         `SELECT event_type,payload,occurred_at FROM app.audit_events
@@ -320,6 +484,11 @@ export class OperationsService {
         ...this.presentLoad(result.rows[0]),
         receipt: receiptHistory[0] ?? null,
         receiptHistory,
+        yardState: yardEvents.rows.at(-1)?.event_type ?? 'NOT_ARRIVED',
+        yardEvents: yardEvents.rows.map((row) => this.presentYardEvent(row)),
+        occurrences: occurrences.rows.map((row) => this.presentOccurrence(row)),
+        romaneio: reports.rows[0] ? this.presentReceiptReport(reports.rows[0]) : null,
+        romaneioHistory: reports.rows.map((row) => this.presentReceiptReport(row)),
         events: audit.rows.filter((event) => {
           if (event.payload.seeded !== true) return true;
           const key = `${event.event_type}:${JSON.stringify(event.payload)}`;
@@ -354,8 +523,15 @@ export class OperationsService {
           WHERE tenant_id=$1 AND id=$2`,
         [tenantId, loadId],
       );
+      const yardEventId = randomUUID();
+      await client.query(
+        `INSERT INTO app.load_yard_events
+          (tenant_id,id,load_id,event_type,occurred_at,created_by)
+         VALUES ($1,$2,$3,'CHECKED_IN',now(),$4)`,
+        [tenantId, yardEventId, loadId, actorId],
+      );
       await this.record(client, tenantId, actorId, 'load.receiving_started', loadId, {
-        previousStatus: 'SCHEDULED', status: 'IN_RECEIVING',
+        previousStatus: 'SCHEDULED', status: 'IN_RECEIVING', yardEventId,
       });
       return { ...this.presentLoad(load.rows[0]), status: 'IN_RECEIVING' };
     });
@@ -474,6 +650,185 @@ export class OperationsService {
     });
   }
 
+  recordYardEvent(tenantId: string, actorId: string, loadId: string, input: RecordYardEventInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'OPERATIONS_EDIT');
+      const load = await client.query<{ status: string }>(
+        `SELECT status FROM app.loads WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+        [tenantId, loadId],
+      );
+      if (!load.rows[0]) throw new NotFoundException({ code: 'LOAD_NOT_FOUND' });
+      if (load.rows[0].status === 'CANCELLED') {
+        throw new ConflictException({ code: 'YARD_EVENT_LOAD_CANCELLED' });
+      }
+      const latest = await client.query<{ event_type: string; occurred_at: Date }>(
+        `SELECT event_type,occurred_at FROM app.load_yard_events
+          WHERE tenant_id=$1 AND load_id=$2 ORDER BY occurred_at DESC,id DESC LIMIT 1 FOR UPDATE`,
+        [tenantId, loadId],
+      );
+      const previous = latest.rows[0]?.event_type ?? 'NOT_ARRIVED';
+      const expectedPrevious: Record<RecordYardEventInput['eventType'], string> = {
+        QUEUED: 'CHECKED_IN', CALLED_TO_SCALE: 'QUEUED', RELEASED: 'CALLED_TO_SCALE', DEPARTED: 'RELEASED',
+      };
+      if (previous !== expectedPrevious[input.eventType]) {
+        throw new ConflictException({ code: 'INVALID_YARD_TRANSITION', previous, requested: input.eventType });
+      }
+      if (latest.rows[0] && new Date(input.occurredAt) < latest.rows[0].occurred_at) {
+        throw new UnprocessableEntityException({ code: 'YARD_EVENT_OUT_OF_ORDER' });
+      }
+      if (input.eventType === 'RELEASED' && load.rows[0].status !== 'RECEIVED') {
+        throw new ConflictException({ code: 'YARD_RELEASE_REQUIRES_ACCEPTED_RECEIPT' });
+      }
+      const eventId = randomUUID();
+      const result = await client.query<YardEventRow>(
+        `INSERT INTO app.load_yard_events
+          (tenant_id,id,load_id,event_type,location_code,occurred_at,notes,created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         RETURNING id,event_type,location_code,occurred_at,notes,created_at`,
+        [tenantId, eventId, loadId, input.eventType, input.locationCode, input.occurredAt, input.notes, actorId],
+      );
+      await this.record(client, tenantId, actorId, 'load.yard_event_recorded', loadId, {
+        yardEventId: eventId, previous, eventType: input.eventType,
+        locationCode: input.locationCode, occurredAt: input.occurredAt,
+      });
+      return { yardState: input.eventType, event: this.presentYardEvent(result.rows[0]!) };
+    });
+  }
+
+  createOccurrence(tenantId: string, actorId: string, loadId: string, input: CreateLoadOccurrenceInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'OPERATIONS_EDIT');
+      const load = await client.query(`SELECT 1 FROM app.loads WHERE tenant_id=$1 AND id=$2`, [tenantId, loadId]);
+      if (!load.rows[0]) throw new NotFoundException({ code: 'LOAD_NOT_FOUND' });
+      const occurrenceId = randomUUID();
+      const result = await client.query<OccurrenceRow>(
+        `INSERT INTO app.load_occurrences
+          (tenant_id,id,load_id,category,severity,title,description,occurred_at,created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         RETURNING id,category,severity,title,description,occurred_at,status,resolution,
+                   resolved_at,created_at,updated_at`,
+        [tenantId, occurrenceId, loadId, input.category, input.severity, input.title,
+          input.description, input.occurredAt, actorId],
+      );
+      await this.record(client, tenantId, actorId, 'load.occurrence_created', loadId, {
+        occurrenceId, category: input.category, severity: input.severity, title: input.title,
+      });
+      return this.presentOccurrence(result.rows[0]!);
+    });
+  }
+
+  resolveOccurrence(tenantId: string, actorId: string, loadId: string, occurrenceId: string,
+    input: ResolveLoadOccurrenceInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'OPERATIONS_EDIT');
+      const occurrence = await client.query<OccurrenceRow>(
+        `SELECT id,category,severity,title,description,occurred_at,status,resolution,
+                resolved_at,created_at,updated_at
+           FROM app.load_occurrences
+          WHERE tenant_id=$1 AND load_id=$2 AND id=$3 FOR UPDATE`,
+        [tenantId, loadId, occurrenceId],
+      );
+      if (!occurrence.rows[0]) throw new NotFoundException({ code: 'LOAD_OCCURRENCE_NOT_FOUND' });
+      if (occurrence.rows[0].status === 'RESOLVED') {
+        throw new ConflictException({ code: 'LOAD_OCCURRENCE_ALREADY_RESOLVED' });
+      }
+      const result = await client.query<OccurrenceRow>(
+        `UPDATE app.load_occurrences
+            SET status='RESOLVED',resolution=$4,resolved_by=$5,resolved_at=now(),updated_at=now()
+          WHERE tenant_id=$1 AND load_id=$2 AND id=$3
+          RETURNING id,category,severity,title,description,occurred_at,status,resolution,
+                    resolved_at,created_at,updated_at`,
+        [tenantId, loadId, occurrenceId, input.resolution, actorId],
+      );
+      await this.record(client, tenantId, actorId, 'load.occurrence_resolved', loadId, {
+        occurrenceId, resolution: input.resolution,
+      });
+      return this.presentOccurrence(result.rows[0]!);
+    });
+  }
+
+  issueRomaneio(tenantId: string, actorId: string, loadId: string) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'OPERATIONS_EDIT');
+      const load = await client.query<LoadRow>(
+        `SELECT l.id,l.contract_id,l.scheduled_at,l.expected_weight_kg,l.vehicle_plate,
+                l.carrier_name,l.destination_code,l.status,l.created_at,t.timezone
+           FROM app.loads l JOIN app.tenants t ON t.id=l.tenant_id
+          WHERE l.tenant_id=$1 AND l.id=$2 FOR UPDATE OF l`,
+        [tenantId, loadId],
+      );
+      if (!load.rows[0]) throw new NotFoundException({ code: 'LOAD_NOT_FOUND' });
+      const receipt = await client.query<ReceiptRow>(
+        `SELECT id,version,received_at,gross_weight_kg,tare_weight_kg,net_weight_kg,
+                inbound_invoice_number,inbound_invoice_series,inbound_invoice_access_key,
+                document_weight_kg,considered_weight_kg,accepted_weight_kg,weight_decision_reason,
+                weighing_mode,scale_ticket_number,contingency_reason,moisture_pct,
+                impurity_pct,damaged_pct,quality_decision,notes,created_at
+           FROM app.load_receipts
+          WHERE tenant_id=$1 AND load_id=$2 AND is_current=true FOR UPDATE`,
+        [tenantId, loadId],
+      );
+      const currentReceipt = receipt.rows[0];
+      if (!currentReceipt || currentReceipt.quality_decision !== 'ACCEPTED') {
+        throw new ConflictException({ code: 'ROMANEIO_REQUIRES_ACCEPTED_RECEIPT' });
+      }
+      if (!currentReceipt.inbound_invoice_number || !currentReceipt.inbound_invoice_series
+        || !currentReceipt.document_weight_kg || !currentReceipt.considered_weight_kg
+        || !currentReceipt.accepted_weight_kg) {
+        throw new ConflictException({ code: 'ROMANEIO_RECEIPT_DATA_INCOMPLETE' });
+      }
+      const previous = await client.query<ReceiptReportRow>(
+        `SELECT id,receipt_id,reference,version,is_current,issued_at,inbound_invoice_number,
+                inbound_invoice_series,inbound_invoice_access_key,document_weight_kg,
+                arrival_weight_kg,considered_weight_kg,accepted_weight_kg,scale_ticket_number,
+                moisture_pct,impurity_pct,damaged_pct,created_at
+           FROM app.load_receipt_reports
+          WHERE tenant_id=$1 AND load_id=$2 AND is_current=true FOR UPDATE`,
+        [tenantId, loadId],
+      );
+      if (previous.rows[0]?.receipt_id === currentReceipt.id) {
+        return this.presentReceiptReport(previous.rows[0]);
+      }
+      if (previous.rows[0]) {
+        await client.query(
+          `UPDATE app.load_receipt_reports SET is_current=false
+            WHERE tenant_id=$1 AND load_id=$2 AND is_current=true`,
+          [tenantId, loadId],
+        );
+      }
+      const year = new Intl.DateTimeFormat('en-US', {
+        year: 'numeric', timeZone: load.rows[0].timezone,
+      }).format(currentReceipt.received_at);
+      const reference = `RM-${load.rows[0].destination_code}-${year}-${loadId.replaceAll('-', '').slice(-8).toUpperCase()}`;
+      const version = (previous.rows[0]?.version ?? 0) + 1;
+      const reportId = randomUUID();
+      const result = await client.query<ReceiptReportRow>(
+        `INSERT INTO app.load_receipt_reports
+          (tenant_id,id,load_id,receipt_id,reference,version,issued_at,inbound_invoice_number,
+           inbound_invoice_series,inbound_invoice_access_key,document_weight_kg,arrival_weight_kg,
+           considered_weight_kg,accepted_weight_kg,scale_ticket_number,moisture_pct,impurity_pct,
+           damaged_pct,created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,now(),$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+         RETURNING id,receipt_id,reference,version,is_current,issued_at,inbound_invoice_number,
+                   inbound_invoice_series,inbound_invoice_access_key,document_weight_kg,
+                   arrival_weight_kg,considered_weight_kg,accepted_weight_kg,scale_ticket_number,
+                   moisture_pct,impurity_pct,damaged_pct,created_at`,
+        [tenantId, reportId, loadId, currentReceipt.id, reference, version,
+          currentReceipt.inbound_invoice_number, currentReceipt.inbound_invoice_series,
+          currentReceipt.inbound_invoice_access_key, currentReceipt.document_weight_kg,
+          currentReceipt.net_weight_kg, currentReceipt.considered_weight_kg,
+          currentReceipt.accepted_weight_kg, currentReceipt.scale_ticket_number,
+          currentReceipt.moisture_pct, currentReceipt.impurity_pct, currentReceipt.damaged_pct, actorId],
+      );
+      const eventType = previous.rows[0] ? 'load.romaneio_corrected' : 'load.romaneio_issued';
+      await this.record(client, tenantId, actorId, eventType, loadId, {
+        romaneioId: reportId, reference, version, receiptId: currentReceipt.id,
+        previousVersion: previous.rows[0]?.version ?? null,
+      });
+      return this.presentReceiptReport(result.rows[0]!);
+    });
+  }
+
   private async contractForScheduling(client: PoolClient, tenantId: string, contractId: string,
     scheduledLocal: string) {
     const result = await client.query<ContractForScheduling>(
@@ -530,6 +885,56 @@ export class OperationsService {
       damagedPct: row.damaged_pct,
       qualityDecision: row.quality_decision,
       notes: row.notes,
+      createdAt: row.created_at.toISOString(),
+    };
+  }
+
+  private presentYardEvent(row: YardEventRow) {
+    return {
+      id: row.id,
+      eventType: row.event_type,
+      locationCode: row.location_code,
+      occurredAt: row.occurred_at.toISOString(),
+      notes: row.notes,
+      createdAt: row.created_at.toISOString(),
+    };
+  }
+
+  private presentOccurrence(row: OccurrenceRow) {
+    return {
+      id: row.id,
+      category: row.category,
+      severity: row.severity,
+      title: row.title,
+      description: row.description,
+      occurredAt: row.occurred_at.toISOString(),
+      status: row.status,
+      resolution: row.resolution,
+      resolvedAt: row.resolved_at?.toISOString() ?? null,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    };
+  }
+
+  private presentReceiptReport(row: ReceiptReportRow) {
+    return {
+      id: row.id,
+      receiptId: row.receipt_id,
+      reference: row.reference,
+      version: row.version,
+      isCurrent: row.is_current,
+      issuedAt: row.issued_at.toISOString(),
+      inboundInvoiceNumber: row.inbound_invoice_number,
+      inboundInvoiceSeries: row.inbound_invoice_series,
+      inboundInvoiceAccessKey: row.inbound_invoice_access_key,
+      documentWeightKg: row.document_weight_kg,
+      arrivalWeightKg: row.arrival_weight_kg,
+      consideredWeightKg: row.considered_weight_kg,
+      acceptedWeightKg: row.accepted_weight_kg,
+      scaleTicketNumber: row.scale_ticket_number,
+      moisturePct: row.moisture_pct,
+      impurityPct: row.impurity_pct,
+      damagedPct: row.damaged_pct,
       createdAt: row.created_at.toISOString(),
     };
   }

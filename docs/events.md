@@ -14,6 +14,11 @@
 | `load.receiving_started` | load | operador inicia o recebimento | pátio, fila de trabalho |
 | `load.receipt_recorded` | load | primeira pesagem e classificação registradas | estoque, saldo contratual |
 | `load.receipt_corrected` | load | nova versão substitui o registro vigente | estoque, reconciliação |
+| `load.yard_event_recorded` | load | carga avança por check-in, fila, balança, liberação ou saída | pátio, fila de trabalho |
+| `load.occurrence_created` | load | exceção operacional é registrada | operações, fila de trabalho |
+| `load.occurrence_resolved` | load | ocorrência recebe resolução sem apagar o fato original | operações, auditoria |
+| `load.romaneio_issued` | load | primeira versão do romaneio é emitida após aceite | operações, documentos |
+| `load.romaneio_corrected` | load | nova versão acompanha correção do recebimento | operações, documentos, auditoria |
 | `sales_contract.created` | sales_contract | demanda de venda é formalizada | alocação, carteira de venda |
 | `sales_contract.updated` | sales_contract | condições ainda executáveis são alteradas | carteira de venda, auditoria |
 | `inventory.allocated` | inventory_allocation | lote é reservado para contrato de venda | disponibilidade, programação |

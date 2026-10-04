@@ -5,12 +5,18 @@ import { SchemaPipe } from '../common/schema.pipe.js';
 import { OperationsService } from './operations.service.js';
 import {
   cancelLoadSchema,
+  createLoadOccurrenceSchema,
   recordLoadReceiptSchema,
+  recordYardEventSchema,
   rescheduleLoadSchema,
+  resolveLoadOccurrenceSchema,
   scheduleLoadSchema,
   type CancelLoadInput,
+  type CreateLoadOccurrenceInput,
   type RecordLoadReceiptInput,
+  type RecordYardEventInput,
   type RescheduleLoadInput,
+  type ResolveLoadOccurrenceInput,
   type ScheduleLoadInput,
 } from './operations.schemas.js';
 
@@ -32,6 +38,16 @@ export class OperationsController {
   list(@Identity() identity: RequestIdentity,
     @Param('contractId', ParseUUIDPipe) contractId: string) {
     return this.service.listContractLoads(identity.tenantId, identity.actorId, contractId);
+  }
+
+  @Get('operations/yard')
+  yardBoard(@Identity() identity: RequestIdentity) {
+    return this.service.yardBoard(identity.tenantId, identity.actorId);
+  }
+
+  @Get('operations/occurrences')
+  occurrenceBoard(@Identity() identity: RequestIdentity) {
+    return this.service.occurrenceBoard(identity.tenantId, identity.actorId);
   }
 
   @Get('loads/:loadId')
@@ -65,5 +81,33 @@ export class OperationsController {
     @Param('loadId', ParseUUIDPipe) loadId: string,
     @Body(new SchemaPipe(recordLoadReceiptSchema)) input: RecordLoadReceiptInput) {
     return this.service.recordReceipt(identity.tenantId, identity.actorId, loadId, input);
+  }
+
+  @Post('loads/:loadId/yard-events')
+  recordYardEvent(@Identity() identity: RequestIdentity,
+    @Param('loadId', ParseUUIDPipe) loadId: string,
+    @Body(new SchemaPipe(recordYardEventSchema)) input: RecordYardEventInput) {
+    return this.service.recordYardEvent(identity.tenantId, identity.actorId, loadId, input);
+  }
+
+  @Post('loads/:loadId/occurrences')
+  createOccurrence(@Identity() identity: RequestIdentity,
+    @Param('loadId', ParseUUIDPipe) loadId: string,
+    @Body(new SchemaPipe(createLoadOccurrenceSchema)) input: CreateLoadOccurrenceInput) {
+    return this.service.createOccurrence(identity.tenantId, identity.actorId, loadId, input);
+  }
+
+  @Post('loads/:loadId/occurrences/:occurrenceId/resolve')
+  resolveOccurrence(@Identity() identity: RequestIdentity,
+    @Param('loadId', ParseUUIDPipe) loadId: string,
+    @Param('occurrenceId', ParseUUIDPipe) occurrenceId: string,
+    @Body(new SchemaPipe(resolveLoadOccurrenceSchema)) input: ResolveLoadOccurrenceInput) {
+    return this.service.resolveOccurrence(identity.tenantId, identity.actorId, loadId, occurrenceId, input);
+  }
+
+  @Post('loads/:loadId/romaneio')
+  issueRomaneio(@Identity() identity: RequestIdentity,
+    @Param('loadId', ParseUUIDPipe) loadId: string) {
+    return this.service.issueRomaneio(identity.tenantId, identity.actorId, loadId);
   }
 }
