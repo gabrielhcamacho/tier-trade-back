@@ -33,6 +33,7 @@ describe('commercial foundation migration', () => {
       '20261004155718_phase1_commodity_and_counterparty_profile.sql',
       '20261004164744_sales_contract_versions.sql',
       '20261004221411_operations_receipt_document_weights.sql',
+      '20261004224629_cover_sales_contract_version_recorder_fk.sql',
     ]) {
       const migration = await readFile(new URL(`../../supabase/migrations/${migrationName}`, import.meta.url), 'utf8');
       await db.exec(migration);
