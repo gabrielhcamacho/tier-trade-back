@@ -109,6 +109,27 @@ export class CommercialService {
     });
   }
 
+  async listOffers(tenantId: string, actorId: string) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertMember(client, tenantId, actorId);
+      const tenant = await this.db.one<{ legal_name: string; is_demo: boolean }>(client,
+        'SELECT legal_name,is_demo FROM app.tenants WHERE id=$1', [tenantId]);
+      const result = await client.query(
+        `SELECT o.id,o.status,o.commodity,o.unit,o.quantity_sc,
+                o.delivery_start::text,o.delivery_end::text,o.created_at::text,
+                cp.legal_name AS counterparty_name,
+                s.purchase_price_per_sc,s.projected_margin_per_sc
+           FROM app.offers o
+           JOIN app.counterparties cp
+             ON (cp.tenant_id,cp.id)=(o.tenant_id,o.counterparty_id)
+           JOIN app.pricing_scenarios s
+             ON (s.tenant_id,s.offer_id)=(o.tenant_id,o.id) AND s.is_current=true
+          WHERE o.tenant_id=$1
+          ORDER BY o.created_at DESC,o.id DESC`, [tenantId]);
+      return { tenant: { legalName: tenant.legal_name, isDemo: tenant.is_demo }, items: result.rows };
+    });
+  }
+
   async updateOffer(tenantId: string, actorId: string, offerId: string, input: CreateOfferInput) {
     this.assertDeliveryWindow(input);
     const pricing = calculateProjectedMargin(input);

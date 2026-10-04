@@ -47,6 +47,11 @@ export class CommercialController {
     return this.service.createOffer(identity.tenantId, identity.actorId, input);
   }
 
+  @Get('offers')
+  offers(@Identity() identity: RequestIdentity) {
+    return this.service.listOffers(identity.tenantId, identity.actorId);
+  }
+
   @Put('offers/:offerId')
   update(@Identity() identity: RequestIdentity, @Param('offerId', ParseUUIDPipe) offerId: string,
     @Body(new SchemaPipe(createOfferSchema)) input: CreateOfferInput) {

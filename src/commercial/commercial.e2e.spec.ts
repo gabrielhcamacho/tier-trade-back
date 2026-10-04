@@ -108,6 +108,12 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     expect(created.statusCode).toBe(201);
     let offer = created.json();
     expect(offer.pricing.projectedMarginPerSc).toBe('2.50');
+    const listed = await server.inject({ method: 'GET', url: '/v1/offers', headers: identityHeaders });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json().items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: offer.offerId, counterparty_name: counterparty.json().legalName,
+        commodity: 'MILHO', status: 'DRAFT' }),
+    ]));
     const edited = await server.inject({
       method: 'PUT', url: `/v1/offers/${offer.offerId}`, headers: identityHeaders,
       payload: { ...offerInput, saleReferencePerSc: '68.00' },

@@ -77,6 +77,10 @@ paths:
         '200': { description: Perfil confirmado e auditado }
         '422': { description: Perfil incompatível com documento existente }
   /v1/offers:
+    get:
+      summary: Lista ofertas do tenant autenticado com cenário vigente
+      responses:
+        '200': { description: Carteira de ofertas isolada por tenant }
     post:
       summary: Registra uma oferta e seu cenário determinístico
       requestBody:
