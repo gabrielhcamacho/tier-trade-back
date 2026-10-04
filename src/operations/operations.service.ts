@@ -299,14 +299,25 @@ export class OperationsService {
       const audit = await client.query<{ event_type: string; payload: Record<string, unknown>; occurred_at: Date }>(
         `SELECT event_type,payload,occurred_at FROM app.audit_events
           WHERE tenant_id=$1 AND aggregate_type='load' AND aggregate_id=$2
+            AND (payload->>'seeded'='true' OR occurred_at > COALESCE((
+              SELECT max(occurred_at) FROM app.audit_events
+               WHERE tenant_id=$1 AND event_type='demo.seed_reset'
+            ),'-infinity'::timestamptz))
           ORDER BY occurred_at DESC,id DESC`,
         [tenantId, loadId],
       );
+      const seededEvents = new Set<string>();
       return {
         ...this.presentLoad(result.rows[0]),
         receipt: receiptHistory[0] ?? null,
         receiptHistory,
-        events: audit.rows.map((event) => ({
+        events: audit.rows.filter((event) => {
+          if (event.payload.seeded !== true) return true;
+          const key = `${event.event_type}:${JSON.stringify(event.payload)}`;
+          if (seededEvents.has(key)) return false;
+          seededEvents.add(key);
+          return true;
+        }).map((event) => ({
           type: event.event_type,
           payload: event.payload,
           occurredAt: event.occurred_at.toISOString(),

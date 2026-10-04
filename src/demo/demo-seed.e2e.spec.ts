@@ -2,6 +2,9 @@ import { readFile } from 'node:fs/promises';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEMO_SEED_VERSION, resetDemoTenant } from './demo-seed.js';
+import { TenantDatabase } from '../database/database.js';
+import { OperationsService } from '../operations/operations.service.js';
+import type { InventoryReceiptPort } from '../inventory/inventory.port.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const demoTenantId = '11111111-1111-4111-8111-111111111111';
@@ -175,12 +178,22 @@ describe.runIf(Boolean(databaseUrl))('canonical demo tenant seed', () => {
       "UPDATE app.offers SET quantity_sc=1 WHERE tenant_id=$1 AND id='d2000000-0000-4000-8000-000000000001'",
       [demoTenantId],
     );
+    const operations = new OperationsService(new TenantDatabase(pool), {} as InventoryReceiptPort);
+    const demoLoadId = 'd7000000-0000-4000-8000-000000000003';
+    await operations.rescheduleLoad(demoTenantId, demoActorId, demoLoadId, {
+      scheduledLocal: '2026-10-24T09:00', expectedWeightKg: '46000.000',
+      vehiclePlate: 'GHI7J89', carrierName: 'Transportadora Horizonte — Dado fictício',
+      destinationCode: 'TERMINAL_SP_02', reason: 'Ajuste temporário antes de restaurar o cenário demo.',
+    });
     await resetDemoTenant(pool, { tenantId: demoTenantId, actorId: demoActorId });
     const restored = await pool.query<{ quantity_sc: string }>(
       "SELECT quantity_sc FROM app.offers WHERE tenant_id=$1 AND id='d2000000-0000-4000-8000-000000000001'",
       [demoTenantId],
     );
     expect(restored.rows[0]?.quantity_sc).toBe('20000.000000');
+    const restoredLoad = await operations.loadDetail(demoTenantId, demoActorId, demoLoadId);
+    expect(restoredLoad.events.filter((event) => event.type === 'load.scheduled')).toHaveLength(1);
+    expect(restoredLoad.events.filter((event) => event.type === 'load.rescheduled')).toHaveLength(0);
 
     await expect(resetDemoTenant(pool, { tenantId: protectedTenantId, actorId: protectedActorId }))
       .rejects.toThrow('TENANT_IS_NOT_MARKED_AS_DEMO');
