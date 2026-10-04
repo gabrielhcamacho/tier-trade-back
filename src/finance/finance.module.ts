@@ -9,6 +9,6 @@ import { FinanceService } from './finance.service.js';
   imports: [AuthModule, DatabaseModule],
   controllers: [FinanceController],
   providers: [FinanceService, { provide: FinancialProjectionPort, useExisting: FinanceService }],
-  exports: [FinancialProjectionPort],
+  exports: [FinancialProjectionPort, FinanceService],
 })
 export class FinanceModule {}

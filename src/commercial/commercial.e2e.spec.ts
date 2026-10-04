@@ -66,6 +66,20 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     await app?.close();
   });
 
+  it('serves the tenant-scoped overview and rejects unmodeled filters', async () => {
+    const server = app.getHttpAdapter().getInstance();
+    const overview = await server.inject({ method: 'GET', url: '/v1/overview?commodity=MILHO',
+      headers: identityHeaders });
+    expect(overview.statusCode).toBe(200);
+    expect(overview.json()).toMatchObject({ contractVersion: 1, consistency: 'MULTI_TRANSACTION',
+      filters: { commodity: 'MILHO', financeScope: 'TENANT_CONSOLIDATED' },
+      indicators: { pendingApprovalCount: 0 }, access: { scope: 'TENANT' } });
+    const unsupported = await server.inject({ method: 'GET', url: '/v1/overview?crop=25%2F26',
+      headers: identityHeaders });
+    expect(unsupported.statusCode).toBe(400);
+    expect(unsupported.json()).toMatchObject({ code: 'OVERVIEW_FILTER_NOT_MODELED' });
+  });
+
   it('moves an offer requiring approval through to an active contract', async () => {
     const server = app.getHttpAdapter().getInstance();
     const preflight = await server.inject({
@@ -247,6 +261,13 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
         available_weight_kg: '552000.000',
         pending_obligations: 2,
       }],
+    });
+    const overviewAfterContract = await server.inject({ method: 'GET',
+      url: '/v1/overview?commodity=MILHO', headers: identityHeaders });
+    expect(overviewAfterContract.statusCode).toBe(200);
+    expect(overviewAfterContract.json()).toMatchObject({
+      charts: { marginComponents: [{ contractId: contract.contractId, policyVersion: 2 }] },
+      indicators: { purchaseContractedKg: '600000', pendingObligationCount: 2 },
     });
     const overflow = await server.inject({
       method: 'POST', url: `/v1/contracts/${contract.contractId}/loads`, headers: identityHeaders,

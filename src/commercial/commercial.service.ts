@@ -330,7 +330,7 @@ export class CommercialService {
                 cp.legal_name AS counterparty_name,
                 o.commodity,o.unit,o.quantity_sc,
                 o.delivery_start::text,o.delivery_end::text,
-                s.purchase_price_per_sc,s.projected_margin_per_sc,
+                s.purchase_price_per_sc,s.projected_margin_per_sc,s.policy_version,
                 COALESCE(load_totals.load_count,0)::integer AS load_count,
                 COALESCE(load_totals.scheduled_weight_kg,0)::numeric(20,3) AS scheduled_weight_kg,
                 COALESCE(load_totals.received_weight_kg,0)::numeric(20,3) AS received_weight_kg,

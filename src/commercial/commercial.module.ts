@@ -8,5 +8,6 @@ import { CommercialService } from './commercial.service.js';
   imports: [DatabaseModule, AuthModule],
   controllers: [CommercialController],
   providers: [CommercialService],
+  exports: [CommercialService],
 })
 export class CommercialModule {}

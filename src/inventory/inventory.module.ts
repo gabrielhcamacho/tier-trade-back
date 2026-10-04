@@ -13,6 +13,6 @@ import { InventoryService } from './inventory.service.js';
     InventoryService,
     { provide: InventoryReceiptPort, useExisting: InventoryService },
   ],
-  exports: [InventoryReceiptPort],
+  exports: [InventoryReceiptPort, InventoryService],
 })
 export class InventoryModule {}

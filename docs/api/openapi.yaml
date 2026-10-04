@@ -23,6 +23,53 @@ paths:
       responses:
         '200': { description: Sessão de acesso resolvida }
         '403': { description: Usuário sem membership ativa }
+  /v1/overview:
+    get:
+      summary: Visão operacional consolidada do tenant autenticado (contrato v1)
+      description: >-
+        Compõe leituras de Comercial, Contratos, Financeiro, Estoque e Risco em transações
+        independentes. O filtro de commodity vale somente para ofertas, contratos, execução
+        física e risco; indicadores financeiros permanecem consolidados no tenant. Campos
+        indisponíveis são explicitados, sem simular margem realizada ou projeção de caixa.
+      parameters:
+        - name: commodity
+          in: query
+          schema: { type: string, enum: [MILHO, SOJA] }
+        - name: unit
+          in: query
+          schema: { type: string }
+          description: Ainda não modelado; retorna 400 se informado.
+        - name: crop
+          in: query
+          schema: { type: string }
+          description: Ainda não modelado; retorna 400 se informado.
+        - name: period
+          in: query
+          schema: { type: string }
+          description: Ainda não modelado; retorna 400 se informado.
+      responses:
+        '200':
+          description: Fotografia multi-transação com indicadores, gráficos, exceções e fontes
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [contractVersion, assembledAt, consistency, tenant, access, filters, indicators, charts, exceptions, unavailable, sources]
+                properties:
+                  contractVersion: { type: integer, const: 1 }
+                  assembledAt: { type: string, format: date-time }
+                  consistency: { type: string, const: MULTI_TRANSACTION }
+                  tenant: { type: object }
+                  access: { type: object }
+                  filters: { type: object }
+                  indicators: { type: object }
+                  charts: { type: object }
+                  exceptions: { type: array, items: { type: object } }
+                  unavailable: { type: array, items: { type: object } }
+                  sources: { type: object }
+        '400': { description: Commodity inválida ou filtro sem modelo de dados }
+        '401': { description: Autenticação ausente ou inválida }
+        '404': { description: Membership ativa não encontrada }
   /v1/access/invitations:
     post:
       summary: Convida um usuário e concede acesso ao tenant do administrador
