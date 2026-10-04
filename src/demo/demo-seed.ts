@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 
-export const DEMO_SEED_VERSION = 10;
+export const DEMO_SEED_VERSION = 11;
 
 export type ResetDemoTenantInput = {
   tenantId: string;
@@ -295,12 +295,17 @@ async function seedOperationalData(client: PoolClient, input: ResetDemoTenantInp
   await client.query(
     `INSERT INTO app.load_receipts
       (tenant_id,id,load_id,version,is_current,received_at,gross_weight_kg,tare_weight_kg,
+       inbound_invoice_number,inbound_invoice_series,inbound_invoice_access_key,
+       document_weight_kg,considered_weight_kg,accepted_weight_kg,weight_decision_reason,
        weighing_mode,scale_ticket_number,contingency_reason,moisture_pct,impurity_pct,
        damaged_pct,quality_decision,notes,created_by,created_at) VALUES
       ($1,$2,$4,1,true,'2026-10-01T12:05:00Z',48260.000,15340.000,
+       '102684','1',NULL,32920.000,32920.000,32920.000,NULL,
        'SCALE','TB-2026-001',NULL,13.2000,1.1000,2.3000,'ACCEPTED',
        'Recebimento fictício dentro do padrão informado pelo operador.',$6,'2026-10-01T12:15:00Z'),
       ($1,$3,$5,1,true,'2026-10-01T14:00:00Z',50780.000,14920.000,
+       '102685','1',NULL,35900.000,35860.000,NULL,
+       'Peso considerado mantido igual ao peso de chegada; divergência documental enviada para revisão.',
        'MANUAL_CONTINGENCY',NULL,'Balança integrada indisponível durante o recebimento.',14.8000,2.4000,5.1000,
        'REVIEW_REQUIRED','Dado fictício aguardando decisão humana de qualidade.',$6,'2026-10-01T14:05:00Z')`,
     [tenantId, ...ids.receipts, ids.loads[0], ids.loads[1], actorId],
@@ -449,26 +454,28 @@ async function seedReadModelsAndAudit(client: PoolClient, input: ResetDemoTenant
     { id: randomUUID(), type: 'finance.title_issued', aggregate: 'financial_title', aggregateId: ids.finance.title, occurredAt: '2026-10-01T16:20:00Z', payload: { financialEventId: ids.finance.event, amount: '11360.00' } },
     { id: randomUUID(), type: 'finance.receipt_recorded', aggregate: 'financial_settlement', aggregateId: ids.finance.settlement, occurredAt: '2026-10-02T13:05:00Z', payload: { titleId: ids.finance.title, amount: '4000.00' } },
     { id: randomUUID(), type: 'risk.policy_configured', aggregate: 'risk_policy', aggregateId: ids.riskPolicy, occurredAt: '2026-10-01T12:00:00Z', payload: { commodity: 'MILHO', version: 1, maxNetOpenKg: '2100000.000', warningThresholdPct: '80.00' } },
-    { id: resetEvent, type: 'demo.seed_reset', aggregate: 'tenant', aggregateId: input.tenantId, occurredAt: new Date().toISOString(), payload: {} },
+    { id: resetEvent, type: 'demo.seed_reset', aggregate: 'tenant', aggregateId: input.tenantId, occurredAt: null, payload: {} },
   ];
   for (const event of events) {
     const payload = JSON.stringify({ demoSeedVersion: DEMO_SEED_VERSION, seeded: true, ...event.payload });
     await client.query(
       `INSERT INTO app.audit_events
         (tenant_id,id,actor_id,event_type,aggregate_type,aggregate_id,payload,occurred_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8)`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,COALESCE($8::timestamptz,clock_timestamp()))`,
       [input.tenantId, event.id, input.actorId, event.type, event.aggregate, event.aggregateId, payload, event.occurredAt],
     );
     await client.query(
       `INSERT INTO app.outbox_events
         (tenant_id,id,event_type,aggregate_type,aggregate_id,payload,occurred_at,published_at)
-       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$7)`,
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,COALESCE($7::timestamptz,clock_timestamp()),
+               COALESCE($7::timestamptz,clock_timestamp()))`,
       [input.tenantId, event.id, event.type, event.aggregate, event.aggregateId, payload, event.occurredAt],
     );
     await client.query(
       `INSERT INTO app.commercial_activity_read_model
         (tenant_id,event_id,event_type,aggregate_type,aggregate_id,payload,occurred_at,projected_at)
-       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$7)`,
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,COALESCE($7::timestamptz,clock_timestamp()),
+               COALESCE($7::timestamptz,clock_timestamp()))`,
       [input.tenantId, event.id, event.type, event.aggregate, event.aggregateId, payload, event.occurredAt],
     );
   }

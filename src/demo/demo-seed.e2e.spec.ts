@@ -48,6 +48,7 @@ describe.runIf(Boolean(databaseUrl))('canonical demo tenant seed', () => {
       '20261003194521_fiscal_payments_and_cash_flow.sql',
       '20261004155718_phase1_commodity_and_counterparty_profile.sql',
       '20261004164744_sales_contract_versions.sql',
+      '20261004221411_operations_receipt_document_weights.sql',
     ]) {
       await pool.query(await readFile(new URL(`../../supabase/migrations/${migrationName}`, import.meta.url), 'utf8'));
     }
@@ -78,7 +79,7 @@ describe.runIf(Boolean(databaseUrl))('canonical demo tenant seed', () => {
     const first = await resetDemoTenant(pool, { tenantId: demoTenantId, actorId: demoActorId });
     expect(first).toEqual({
       tenantId: demoTenantId,
-      seedVersion: 10,
+      seedVersion: 11,
       counterparties: 5,
       offers: 4,
       contracts: 2,
@@ -151,7 +152,7 @@ describe.runIf(Boolean(databaseUrl))('canonical demo tenant seed', () => {
     );
     expect(data.rows[0]).toEqual({
       legal_name: 'Cerrado Trading — Demonstração',
-      demo_seed_version: 10,
+      demo_seed_version: 11,
       counterparties: 5,
       offers: 4,
       contracts: 2,

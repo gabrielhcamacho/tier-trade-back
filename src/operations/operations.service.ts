@@ -36,6 +36,13 @@ interface ReceiptRow {
   gross_weight_kg: string;
   tare_weight_kg: string;
   net_weight_kg: string;
+  inbound_invoice_number: string | null;
+  inbound_invoice_series: string | null;
+  inbound_invoice_access_key: string | null;
+  document_weight_kg: string | null;
+  considered_weight_kg: string | null;
+  accepted_weight_kg: string | null;
+  weight_decision_reason: string | null;
   weighing_mode: string;
   scale_ticket_number: string | null;
   contingency_reason: string | null;
@@ -247,7 +254,7 @@ export class OperationsService {
       const result = await client.query<LoadRow & { received_weight_kg: string }>(
         `SELECT l.id,l.contract_id,l.scheduled_at,l.expected_weight_kg,l.vehicle_plate,
                 l.carrier_name,l.destination_code,l.status,l.created_at,
-                COALESCE(r.net_weight_kg,0)::text AS received_weight_kg
+                COALESCE(r.accepted_weight_kg,r.net_weight_kg,0)::text AS received_weight_kg
            FROM app.loads l
            LEFT JOIN app.load_receipts r
              ON (r.tenant_id,r.load_id)=(l.tenant_id,l.id) AND r.is_current=true
@@ -288,6 +295,8 @@ export class OperationsService {
       if (!result.rows[0]) throw new NotFoundException({ code: 'LOAD_NOT_FOUND' });
       const receipts = await client.query<ReceiptRow>(
         `SELECT id,version,received_at,gross_weight_kg,tare_weight_kg,net_weight_kg,
+                inbound_invoice_number,inbound_invoice_series,inbound_invoice_access_key,
+                document_weight_kg,considered_weight_kg,accepted_weight_kg,weight_decision_reason,
                 weighing_mode,scale_ticket_number,contingency_reason,moisture_pct,
                 impurity_pct,damaged_pct,quality_decision,notes,created_at
            FROM app.load_receipts
@@ -359,6 +368,15 @@ export class OperationsService {
       throw new UnprocessableEntityException({ code: 'GROSS_WEIGHT_MUST_EXCEED_TARE' });
     }
     const net = gross.minus(tare);
+    const documentWeight = new Decimal(input.documentWeightKg);
+    const consideredWeight = new Decimal(input.consideredWeightKg);
+    const acceptedWeight = input.acceptedWeightKg === null ? null : new Decimal(input.acceptedWeightKg);
+    const weightsDiffer = !documentWeight.equals(consideredWeight)
+      || !net.equals(consideredWeight)
+      || (acceptedWeight !== null && !acceptedWeight.equals(consideredWeight));
+    if (weightsDiffer && input.weightDecisionReason === null) {
+      throw new UnprocessableEntityException({ code: 'WEIGHT_DIFFERENCE_REASON_REQUIRED' });
+    }
     return this.db.transaction(tenantId, async (client) => {
       await this.assertCapability(client, tenantId, actorId, 'OPERATIONS_EDIT');
       const load = await client.query<LoadRow>(
@@ -375,6 +393,8 @@ export class OperationsService {
 
       const previous = await client.query<ReceiptRow>(
         `SELECT id,version,received_at,gross_weight_kg,tare_weight_kg,net_weight_kg,
+                inbound_invoice_number,inbound_invoice_series,inbound_invoice_access_key,
+                document_weight_kg,considered_weight_kg,accepted_weight_kg,weight_decision_reason,
                 weighing_mode,scale_ticket_number,contingency_reason,moisture_pct,
                 impurity_pct,damaged_pct,quality_decision,notes,created_at
            FROM app.load_receipts
@@ -393,15 +413,22 @@ export class OperationsService {
       const receiptId = randomUUID();
       const receipt = await client.query<ReceiptRow>(
         `INSERT INTO app.load_receipts
-          (tenant_id,id,load_id,version,received_at,gross_weight_kg,tare_weight_kg,
-           weighing_mode,scale_ticket_number,contingency_reason,moisture_pct,impurity_pct,
-           damaged_pct,quality_decision,notes,created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+          (tenant_id,id,load_id,version,received_at,inbound_invoice_number,inbound_invoice_series,
+           inbound_invoice_access_key,document_weight_kg,gross_weight_kg,tare_weight_kg,
+           considered_weight_kg,accepted_weight_kg,weight_decision_reason,weighing_mode,
+           scale_ticket_number,contingency_reason,moisture_pct,impurity_pct,damaged_pct,
+           quality_decision,notes,created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
          RETURNING id,version,received_at,gross_weight_kg,tare_weight_kg,net_weight_kg,
+                   inbound_invoice_number,inbound_invoice_series,inbound_invoice_access_key,
+                   document_weight_kg,considered_weight_kg,accepted_weight_kg,weight_decision_reason,
                    weighing_mode,scale_ticket_number,contingency_reason,moisture_pct,
                    impurity_pct,damaged_pct,quality_decision,notes,created_at`,
-        [tenantId, receiptId, loadId, version, input.receivedAt, input.grossWeightKg,
-          input.tareWeightKg, input.weighingMode, input.scaleTicketNumber,
+        [tenantId, receiptId, loadId, version, input.receivedAt, input.inboundInvoiceNumber,
+          input.inboundInvoiceSeries, input.inboundInvoiceAccessKey, input.documentWeightKg,
+          input.grossWeightKg, input.tareWeightKg, input.consideredWeightKg,
+          input.acceptedWeightKg, weightsDiffer ? input.weightDecisionReason : null,
+          input.weighingMode, input.scaleTicketNumber,
           input.weighingMode === 'MANUAL_CONTINGENCY' ? input.contingencyReason : null,
           input.moisturePct, input.impurityPct, input.damagedPct, input.qualityDecision,
           input.notes, actorId],
@@ -420,9 +447,9 @@ export class OperationsService {
         receiptId,
         receivedAt: new Date(input.receivedAt),
         previousAcceptedWeightKg: previous.rows[0]?.quality_decision === 'ACCEPTED'
-          ? previous.rows[0].net_weight_kg
+          ? previous.rows[0].accepted_weight_kg ?? previous.rows[0].net_weight_kg
           : '0',
-        nextAcceptedWeightKg: input.qualityDecision === 'ACCEPTED' ? net.toFixed(3) : '0',
+        nextAcceptedWeightKg: input.qualityDecision === 'ACCEPTED' ? input.acceptedWeightKg! : '0',
       });
       const eventType = previous.rows[0] ? 'load.receipt_corrected' : 'load.receipt_recorded';
       await this.record(client, tenantId, actorId, eventType, loadId, {
@@ -430,6 +457,11 @@ export class OperationsService {
         previousVersion: previous.rows[0]?.version ?? null,
         previousStatus: load.rows[0].status,
         status: nextStatus,
+        inboundInvoiceNumber: input.inboundInvoiceNumber,
+        documentWeightKg: documentWeight.toFixed(3),
+        arrivalWeightKg: net.toFixed(3),
+        consideredWeightKg: consideredWeight.toFixed(3),
+        acceptedWeightKg: acceptedWeight?.toFixed(3) ?? null,
         netWeightKg: net.toFixed(3),
         weighingMode: input.weighingMode,
         qualityDecision: input.qualityDecision,
@@ -482,6 +514,14 @@ export class OperationsService {
       grossWeightKg: row.gross_weight_kg,
       tareWeightKg: row.tare_weight_kg,
       netWeightKg: row.net_weight_kg,
+      arrivalWeightKg: row.net_weight_kg,
+      inboundInvoiceNumber: row.inbound_invoice_number,
+      inboundInvoiceSeries: row.inbound_invoice_series,
+      inboundInvoiceAccessKey: row.inbound_invoice_access_key,
+      documentWeightKg: row.document_weight_kg,
+      consideredWeightKg: row.considered_weight_kg,
+      acceptedWeightKg: row.accepted_weight_kg,
+      weightDecisionReason: row.weight_decision_reason,
       weighingMode: row.weighing_mode,
       scaleTicketNumber: row.scale_ticket_number,
       contingencyReason: row.contingency_reason,

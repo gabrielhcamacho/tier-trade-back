@@ -618,11 +618,18 @@ components:
     RecordLoadReceipt:
       type: object
       additionalProperties: false
-      required: [receivedAt, grossWeightKg, tareWeightKg, weighingMode, moisturePct, impurityPct, damagedPct, qualityDecision]
+      required: [receivedAt, inboundInvoiceNumber, inboundInvoiceSeries, inboundInvoiceAccessKey, documentWeightKg, grossWeightKg, tareWeightKg, consideredWeightKg, acceptedWeightKg, weightDecisionReason, weighingMode, moisturePct, impurityPct, damagedPct, qualityDecision]
       properties:
         receivedAt: { type: string, format: date-time }
+        inboundInvoiceNumber: { type: string, minLength: 1, maxLength: 40 }
+        inboundInvoiceSeries: { type: string, minLength: 1, maxLength: 20 }
+        inboundInvoiceAccessKey: { type: [string, 'null'], pattern: '^\d{44}$' }
+        documentWeightKg: { type: string, pattern: '^\d+(?:\.\d{1,3})?$' }
         grossWeightKg: { type: string, pattern: '^\d+(?:\.\d{1,3})?$' }
         tareWeightKg: { type: string, pattern: '^\d+(?:\.\d{1,3})?$' }
+        consideredWeightKg: { type: string, pattern: '^\d+(?:\.\d{1,3})?$' }
+        acceptedWeightKg: { type: [string, 'null'], pattern: '^\d+(?:\.\d{1,3})?$' }
+        weightDecisionReason: { type: [string, 'null'], minLength: 10, maxLength: 500 }
         weighingMode: { enum: [SCALE, MANUAL_CONTINGENCY] }
         scaleTicketNumber: { type: [string, 'null'], maxLength: 80 }
         contingencyReason: { type: [string, 'null'], minLength: 10, maxLength: 500 }

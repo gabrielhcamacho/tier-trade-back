@@ -48,6 +48,7 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     await setup.query(await readFile(new URL('../../supabase/migrations/20261003194521_fiscal_payments_and_cash_flow.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261004155718_phase1_commodity_and_counterparty_profile.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261004164744_sales_contract_versions.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261004221411_operations_receipt_document_weights.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../scripts/seed-local.sql', import.meta.url), 'utf8'));
     await setup.end();
 
@@ -263,6 +264,9 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
       method: 'PUT', url: `/v1/loads/${scheduledLoad.json().id}/receipt`, headers: identityHeaders,
       payload: {
         receivedAt: '2026-11-10T12:00:00-03:00', grossWeightKg: '15000.000', tareWeightKg: '16000.000',
+        inboundInvoiceNumber: 'NF-TESTE-1', inboundInvoiceSeries: '1', inboundInvoiceAccessKey: null,
+        documentWeightKg: '33000.000', consideredWeightKg: '33000.000', acceptedWeightKg: '33000.000',
+        weightDecisionReason: 'Pesos divergentes usados exclusivamente no cenário inválido do teste.',
         weighingMode: 'SCALE', scaleTicketNumber: 'TB-TESTE-1', contingencyReason: null,
         moisturePct: '13.2', impurityPct: '1.1', damagedPct: '2.3', qualityDecision: 'ACCEPTED', notes: null,
       },
@@ -273,12 +277,22 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
       method: 'PUT', url: `/v1/loads/${scheduledLoad.json().id}/receipt`, headers: identityHeaders,
       payload: {
         receivedAt: '2026-11-10T12:00:00-03:00', grossWeightKg: '48000.000', tareWeightKg: '15000.000',
+        inboundInvoiceNumber: 'NF-TESTE-1', inboundInvoiceSeries: '1', inboundInvoiceAccessKey: null,
+        documentWeightKg: '33000.000', consideredWeightKg: '33000.000', acceptedWeightKg: '33000.000',
+        weightDecisionReason: null,
         weighingMode: 'SCALE', scaleTicketNumber: 'TB-TESTE-1', contingencyReason: null,
         moisturePct: '13.2', impurityPct: '1.1', damagedPct: '2.3', qualityDecision: 'ACCEPTED', notes: 'Teste de aceite.',
       },
     });
     expect(receipt.statusCode, receipt.body).toBe(200);
-    expect(receipt.json()).toMatchObject({ status: 'RECEIVED', receipt: { version: 1, netWeightKg: '33000.000' } });
+    expect(receipt.json()).toMatchObject({
+      status: 'RECEIVED',
+      receipt: {
+        version: 1, inboundInvoiceNumber: 'NF-TESTE-1', documentWeightKg: '33000.000',
+        arrivalWeightKg: '33000.000', consideredWeightKg: '33000.000',
+        acceptedWeightKg: '33000.000', netWeightKg: '33000.000',
+      },
+    });
     const inventoryAfterReceipt = await server.inject({
       method: 'GET', url: '/v1/inventory', headers: identityHeaders,
     });
@@ -297,13 +311,19 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
       method: 'PUT', url: `/v1/loads/${scheduledLoad.json().id}/receipt`, headers: identityHeaders,
       payload: {
         receivedAt: '2026-11-10T12:00:00-03:00', grossWeightKg: '48010.000', tareWeightKg: '15000.000',
+        inboundInvoiceNumber: 'NF-TESTE-1', inboundInvoiceSeries: '1', inboundInvoiceAccessKey: null,
+        documentWeightKg: '33000.000', consideredWeightKg: '33000.000', acceptedWeightKg: null,
+        weightDecisionReason: 'Peso de chegada divergente mantido em revisão para decisão humana.',
         weighingMode: 'MANUAL_CONTINGENCY', scaleTicketNumber: null,
         contingencyReason: 'Correção manual após indisponibilidade da integração da balança.',
         moisturePct: '14.8', impurityPct: '2.4', damagedPct: '5.1', qualityDecision: 'REVIEW_REQUIRED', notes: null,
       },
     });
     expect(corrected.statusCode, corrected.body).toBe(200);
-    expect(corrected.json()).toMatchObject({ status: 'IN_RECEIVING', receipt: { version: 2, netWeightKg: '33010.000' } });
+    expect(corrected.json()).toMatchObject({
+      status: 'IN_RECEIVING',
+      receipt: { version: 2, arrivalWeightKg: '33010.000', consideredWeightKg: '33000.000', acceptedWeightKg: null },
+    });
     const inventoryAfterReview = await server.inject({
       method: 'GET', url: '/v1/inventory', headers: identityHeaders,
     });

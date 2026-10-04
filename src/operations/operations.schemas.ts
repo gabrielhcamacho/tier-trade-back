@@ -30,8 +30,17 @@ const percentageDecimal = z.string()
 
 export const recordLoadReceiptSchema = z.object({
   receivedAt: z.iso.datetime({ offset: true }),
+  inboundInvoiceNumber: z.string().trim().min(1).max(40),
+  inboundInvoiceSeries: z.string().trim().min(1).max(20),
+  inboundInvoiceAccessKey: z.string().trim()
+    .regex(/^\d{44}$/, 'A chave de acesso deve conter exatamente 44 dígitos.')
+    .nullable(),
+  documentWeightKg: positiveDecimal,
   grossWeightKg: positiveDecimal,
   tareWeightKg: positiveDecimal,
+  consideredWeightKg: positiveDecimal,
+  acceptedWeightKg: positiveDecimal.nullable(),
+  weightDecisionReason: z.string().trim().min(10).max(500).nullable(),
   weighingMode: z.enum(['SCALE', 'MANUAL_CONTINGENCY']),
   scaleTicketNumber: z.string().trim().min(1).max(80).nullable(),
   contingencyReason: z.string().trim().min(10).max(500).nullable(),
@@ -46,6 +55,21 @@ export const recordLoadReceiptSchema = z.object({
   }
   if (value.weighingMode === 'MANUAL_CONTINGENCY' && !value.contingencyReason) {
     context.addIssue({ code: 'custom', path: ['contingencyReason'], message: 'Contingency reason is required.' });
+  }
+  if (value.qualityDecision === 'ACCEPTED' && value.acceptedWeightKg === null) {
+    context.addIssue({ code: 'custom', path: ['acceptedWeightKg'], message: 'Accepted weight is required.' });
+  }
+  if (value.qualityDecision === 'REVIEW_REQUIRED' && value.acceptedWeightKg !== null) {
+    context.addIssue({ code: 'custom', path: ['acceptedWeightKg'], message: 'Accepted weight is only allowed after acceptance.' });
+  }
+  const scaled = (weight: string) => Math.round(Number(weight) * 1000);
+  const arrivalWeight = scaled(value.grossWeightKg) - scaled(value.tareWeightKg);
+  const consideredWeight = scaled(value.consideredWeightKg);
+  const differs = scaled(value.documentWeightKg) !== consideredWeight
+    || arrivalWeight !== consideredWeight
+    || (value.acceptedWeightKg !== null && scaled(value.acceptedWeightKg) !== consideredWeight);
+  if (differs && !value.weightDecisionReason) {
+    context.addIssue({ code: 'custom', path: ['weightDecisionReason'], message: 'Explain the difference between the recorded weights.' });
   }
 });
 
