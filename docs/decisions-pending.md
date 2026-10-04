@@ -1,36 +1,37 @@
-# Decisões pendentes
+# Decisões pendentes do Tier Trade
 
-## Bloqueiam ambiente compartilhado
+O registro principal, com responsáveis por função e momento limite, está no [plano mestre da plataforma](../../tier-trade-platform/docs/plano-mestre.md#6-decisões-pendentes-com-momento-limite). Esta página mostra apenas os bloqueios próximos ao backend.
 
-1. Domínios definitivos do web e da API, SMTP transacional e URLs públicas de redirecionamento.
-2. Plano Supabase, RPO/RTO, retenção e PITR para produção.
-3. Aceite formal de `sa-east-1` para residência dos dados de produção.
-4. Provedor de hosting e IPs de saída para restringir a rede do banco.
+## Antes da próxima modelagem contratual
 
-## Não bloqueiam o desenvolvimento local da primeira fatia
+- **D01 — Recorte do piloto:** trading de referência e de contraste, unidade, commodities, operações e modalidades reais. Responsáveis sugeridos: produto e parceiros piloto.
+- **D02 — Modalidades:** preço a fixar, fixação parcial, base/prêmio/câmbio e quatro cenários de aceite. Responsáveis sugeridos: direção comercial e produto.
 
-- transporte externo definitivo da outbox e tecnologia de fila; o dispatcher interno em PostgreSQL já está definido;
-- ferramenta de observabilidade e retenção dos sinais;
-- integração com Mountier Agro;
-- homologação do pacote fiscal do piloto no catálogo já implementado: estabelecimentos, regimes, CFOPs, incidências, responsável técnico e emissão nativa ou integrada;
-- regras contábeis, plano de contas e descontos de qualidade;
-- pacote inicial de risco de mercado: fonte, praça, instrumentos, periodicidade, curva, base, câmbio e responsabilidade de execução;
-- nome comercial definitivo do produto.
+Essas decisões são necessárias antes da migration que amplie contrato e contraparte. O Escopo do MVP 1.2 inclui soja e milho e preço fixo ou a fixar. Uma redução formal de recorte exige registrar a decisão e atualizar os testes de aceite.
 
-## Resolvidas
+## Antes das próximas slices especializadas
 
-- Supabase Auth é o primeiro adaptador OIDC;
-- cada tenant configura e versiona a própria política de margem;
-- a primeira slice está tecnicamente homologada para edição e cancelamento controlados.
-- o Control Plane mínimo resolve um único tenant ativo por usuário e coordena convite, membership e capabilities;
-- no MVP, o convite parte da API administrativa; a origem será substituída pelo painel interno comercial sem mudar o contrato de acesso.
-- o projeto `Tier trade geral` em `sa-east-1` é o ambiente compartilhado do piloto;
-- SSL do banco está obrigatório e as migrations versionadas são aplicadas pelo fluxo Supabase CLI;
-- piloto e produção usarão projetos Supabase separados.
-- expedições de venda geram previsão financeira; títulos e baixas são registros separados, auditados e reversíveis.
-- posição física, contratual e financeira usa registros oficiais; limites de posição são configuráveis e versionados por tenant.
-- documentos fiscais podem ser recebidos, corrigidos, validados e rejeitados; o cálculo tributário só ocorre com configuração ativa e homologada.
-- estabelecimentos e configurações fiscais podem ser cadastrados, editados, ativados e versionados; versões ativas são imutáveis e registram base e arredondamento explícitos.
-- o motor fiscal seleciona uma versão por contexto e vigência, usa Decimal, é idempotente e persiste memória imutável;
-- o aceite fiscal gera obrigações, ajuste separado do título comercial e conta a pagar separada para a autoridade;
-- pagamentos fiscais parciais ou totais e seus estornos atualizam obrigação, título e caixa atomicamente; conciliação bancária e contabilização permanecem para as próximas fatias.
+- **D03 — Qualidade:** tabelas, limites, tolerâncias, contraprova e base de desconto de soja/milho, antes da slice 3.
+- **D04 — Frete:** responsável, rateio, documentos e gatilho da despesa, antes das slices 4 e 7.
+- **D05 — Fiscal MT:** estabelecimentos, regimes, operação, UPF, FETHAB, IAGRO, SENAR, fundos, bases, vigência e arredondamento, antes das slices 5 e 8.
+- **D06 — Tesouraria:** banco, extrato, aprovadores e conciliação, antes da slice 7.
+- **D07 — Contábil:** plano, eventos, apropriações, integração ou execução nativa e fechamento, antes da slice 9.
+- **D08 — Risco:** fonte, praça, instrumentos, frequência, base/câmbio e executor, antes da slice 10.
+- **D09 — Migração:** fontes, responsáveis, volumes, mapeamentos, corte e tolerâncias, antes da slice 11.
+
+`Exemplos.xlsx` fornece cenários e perguntas; taxas e tratamentos nela vistos não estão homologados para uso oficial.
+
+## Antes de declarar produção pronta
+
+- **D10 — Continuidade:** projeto Supabase separado, backup/PITR, RPO, RTO, retenção e restauração ensaiada.
+- **D11 — Operação:** domínios, SMTP, redirects, aceite da região, IPs de saída, administradores e MFA.
+
+Convite via API administrativa e ambiente compartilhado do piloto permanecem soluções atuais. Painel comercial do SaaS, preços, implantação e onboarding self-service são posteriores ao primeiro piloto assistido e estão em D12 no plano mestre.
+
+## Decisões já tomadas
+
+- Supabase Auth é o primeiro adaptador de identidade; tenant vem de membership verificada, não do navegador.
+- A política de margem é configurável e versionada por tenant.
+- O ambiente compartilhado do piloto usa Supabase em `sa-east-1`; produção terá projeto independente.
+- API e worker do MVP são implantados no DigitalOcean; frontend no Vercel. O worker combinado é a configuração inicial de menor porte, sujeita a validação de capacidade e isolamento.
+- Pagamentos fiscais e estornos são persistidos; conciliação bancária e contabilização continuam pendentes.

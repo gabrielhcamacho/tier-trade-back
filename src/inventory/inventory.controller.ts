@@ -37,6 +37,12 @@ export class InventoryController {
     return this.service.updateSalesContract(identity.tenantId, identity.actorId, contractId, input);
   }
 
+  @Get('sales-contracts/:contractId/versions')
+  salesContractVersions(@Identity() identity: RequestIdentity,
+    @Param('contractId', ParseUUIDPipe) contractId: string) {
+    return this.service.salesContractVersions(identity.tenantId, identity.actorId, contractId);
+  }
+
   @Post('allocations')
   allocate(@Identity() identity: RequestIdentity,
     @Body(new SchemaPipe(allocationSchema)) input: AllocationInput) {

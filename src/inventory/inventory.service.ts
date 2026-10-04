@@ -224,11 +224,14 @@ export class InventoryService extends InventoryReceiptPort {
   createSalesContract(tenantId: string, actorId: string, input: SalesContractInput) {
     return this.db.transaction(tenantId, async (client) => {
       await this.assertCapability(client, tenantId, actorId, 'COMMERCIAL_EDIT');
-      const counterparty = await client.query(
-        'SELECT 1 FROM app.counterparties WHERE tenant_id=$1 AND id=$2',
+      const counterparty = await client.query<{ party_type: string }>(
+        'SELECT party_type FROM app.counterparties WHERE tenant_id=$1 AND id=$2',
         [tenantId, input.counterpartyId],
       );
       if (counterparty.rowCount !== 1) throw new NotFoundException({ code: 'COUNTERPARTY_NOT_FOUND' });
+      if (counterparty.rows[0]?.party_type === 'UNCLASSIFIED') {
+        throw new UnprocessableEntityException({ code: 'COUNTERPARTY_PROFILE_REQUIRED' });
+      }
       const id = randomUUID();
       try {
         await client.query(
@@ -245,6 +248,7 @@ export class InventoryService extends InventoryReceiptPort {
         if (isUniqueViolation(error)) throw new ConflictException({ code: 'SALES_CONTRACT_REFERENCE_EXISTS' });
         throw error;
       }
+      await this.recordSalesContractVersion(client, tenantId, actorId, id);
       await this.record(client, tenantId, actorId, 'sales_contract.created', 'sales_contract', id, input);
       return { id, status: 'ACTIVE', ...input };
     });
@@ -266,9 +270,12 @@ export class InventoryService extends InventoryReceiptPort {
       if (new Decimal(input.quantityKg).lessThan(allocated.rows[0]!.allocated_kg)) {
         throw new UnprocessableEntityException({ code: 'SALES_CONTRACT_BELOW_ALLOCATED_BALANCE' });
       }
-      const counterparty = await client.query(
-        'SELECT 1 FROM app.counterparties WHERE tenant_id=$1 AND id=$2', [tenantId, input.counterpartyId]);
+      const counterparty = await client.query<{ party_type: string }>(
+        'SELECT party_type FROM app.counterparties WHERE tenant_id=$1 AND id=$2', [tenantId, input.counterpartyId]);
       if (counterparty.rowCount !== 1) throw new NotFoundException({ code: 'COUNTERPARTY_NOT_FOUND' });
+      if (counterparty.rows[0]?.party_type === 'UNCLASSIFIED') {
+        throw new UnprocessableEntityException({ code: 'COUNTERPARTY_PROFILE_REQUIRED' });
+      }
       try {
         await client.query(
           `UPDATE app.sales_contracts SET counterparty_id=$3,reference=$4,commodity=$5,
@@ -284,9 +291,49 @@ export class InventoryService extends InventoryReceiptPort {
         if (isUniqueViolation(error)) throw new ConflictException({ code: 'SALES_CONTRACT_REFERENCE_EXISTS' });
         throw error;
       }
+      await this.recordSalesContractVersion(client, tenantId, actorId, contractId);
       await this.record(client, tenantId, actorId, 'sales_contract.updated', 'sales_contract', contractId, input);
       return { id: contractId, status: current.rows[0].status, ...input };
     });
+  }
+
+  salesContractVersions(tenantId: string, actorId: string, contractId: string) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertMember(client, tenantId, actorId);
+      const contract = await client.query(
+        'SELECT 1 FROM app.sales_contracts WHERE tenant_id=$1 AND id=$2', [tenantId, contractId]);
+      if (contract.rowCount !== 1) throw new NotFoundException({ code: 'SALES_CONTRACT_NOT_FOUND' });
+      const versions = await client.query(
+        `SELECT version_number,terms,recorded_by,recorded_at
+           FROM app.sales_contract_versions
+          WHERE tenant_id=$1 AND sales_contract_id=$2
+          ORDER BY version_number DESC`, [tenantId, contractId]);
+      return { contractId, versions: versions.rows };
+    });
+  }
+
+  private async recordSalesContractVersion(client: PoolClient, tenantId: string, actorId: string, contractId: string) {
+    await client.query(
+      `INSERT INTO app.sales_contract_versions
+        (tenant_id,sales_contract_id,version_number,terms,recorded_by)
+       SELECT sc.tenant_id,sc.id,
+              COALESCE((SELECT max(v.version_number)+1 FROM app.sales_contract_versions v
+                         WHERE v.tenant_id=sc.tenant_id AND v.sales_contract_id=sc.id),1),
+              jsonb_build_object(
+                'counterpartyId',sc.counterparty_id,
+                'reference',sc.reference,
+                'commodity',sc.commodity,
+                'quantityKg',sc.quantity_kg::text,
+                'salePricePerKg',sc.sale_price_per_kg::text,
+                'destinationCode',sc.destination_code,
+                'deliveryStart',sc.delivery_start::text,
+                'deliveryEnd',sc.delivery_end::text,
+                'requiredDocuments',sc.required_documents,
+                'paymentTermDays',sc.payment_term_days,
+                'status',sc.status),
+              $3
+         FROM app.sales_contracts sc
+        WHERE sc.tenant_id=$1 AND sc.id=$2`, [tenantId, contractId, actorId]);
   }
 
   allocate(tenantId: string, actorId: string, input: AllocationInput) {

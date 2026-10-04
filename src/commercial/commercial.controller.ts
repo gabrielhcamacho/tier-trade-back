@@ -7,10 +7,12 @@ import {
   createCounterpartySchema,
   createOfferSchema,
   marginPolicySchema,
+  updateCounterpartyProfileSchema,
   type CancelOfferInput,
   type CreateCounterpartyInput,
   type CreateOfferInput,
   type MarginPolicyInput,
+  type UpdateCounterpartyProfileInput,
 } from './commercial.schemas.js';
 import { CommercialService } from './commercial.service.js';
 
@@ -30,6 +32,13 @@ export class CommercialController {
   createCounterparty(@Identity() identity: RequestIdentity,
     @Body(new SchemaPipe(createCounterpartySchema)) input: CreateCounterpartyInput) {
     return this.service.createCounterparty(identity.tenantId, identity.actorId, input);
+  }
+
+  @Patch('counterparties/:counterpartyId/profile')
+  updateCounterpartyProfile(@Identity() identity: RequestIdentity,
+    @Param('counterpartyId', ParseUUIDPipe) counterpartyId: string,
+    @Body(new SchemaPipe(updateCounterpartyProfileSchema)) input: UpdateCounterpartyProfileInput) {
+    return this.service.updateCounterpartyProfile(identity.tenantId, identity.actorId, counterpartyId, input);
   }
 
   @Post('offers')
@@ -82,6 +91,11 @@ export class CommercialController {
   @Get('settings/margin-policy/MILHO')
   policy(@Identity() identity: RequestIdentity) {
     return this.service.currentMarginPolicy(identity.tenantId, identity.actorId, 'MILHO');
+  }
+
+  @Get('settings/margin-policy/SOJA')
+  soyPolicy(@Identity() identity: RequestIdentity) {
+    return this.service.currentMarginPolicy(identity.tenantId, identity.actorId, 'SOJA');
   }
 
   @Patch('settings/margin-policy')

@@ -8,7 +8,7 @@ const date = z.iso.date();
 export const salesContractSchema = z.object({
   counterpartyId: z.uuid(),
   reference: z.string().trim().min(3).max(40),
-  commodity: z.literal('MILHO'),
+  commodity: z.enum(['MILHO', 'SOJA']),
   quantityKg: positiveDecimal,
   salePricePerKg: positiveDecimal,
   destinationCode: z.string().trim().toUpperCase()

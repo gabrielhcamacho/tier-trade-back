@@ -5,7 +5,7 @@ const positiveQuantity = z.string()
   .refine((value) => Number(value) > 0, 'Value must be greater than zero.');
 
 export const configureRiskPolicySchema = z.object({
-  commodity: z.literal('MILHO'),
+  commodity: z.enum(['MILHO', 'SOJA']),
   maxNetOpenKg: positiveQuantity,
   warningThresholdPct: z.string()
     .regex(/^\d+(?:\.\d{1,2})?$/, 'Expected a percentage decimal string.')

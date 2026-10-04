@@ -38,6 +38,8 @@ describe.runIf(Boolean(databaseUrl))('sales fulfillment and inventory ledger', (
       '20261003011929_fiscal_calculation_engine.sql',
       '20261003014022_fiscal_obligations_and_financial_effects.sql',
       '20261003194521_fiscal_payments_and_cash_flow.sql',
+      '20261004155718_phase1_commodity_and_counterparty_profile.sql',
+      '20261004164744_sales_contract_versions.sql',
     ];
     for (const migration of migrations) {
       await setup.query(await readFile(new URL(`../../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
@@ -79,6 +81,36 @@ describe.runIf(Boolean(databaseUrl))('sales fulfillment and inventory ledger', (
       },
     });
     expect(sale.statusCode, sale.body).toBe(201);
+
+    const firstVersion = await server.inject({
+      method: 'GET', url: `/v1/inventory/sales-contracts/${sale.json().id}/versions`, headers,
+    });
+    expect(firstVersion.statusCode, firstVersion.body).toBe(200);
+    expect(firstVersion.json().versions).toMatchObject([
+      { version_number: 1, terms: { reference: 'CV-2026-0043', salePricePerKg: '1.500000' } },
+    ]);
+
+    const amended = await server.inject({
+      method: 'PUT', url: `/v1/inventory/sales-contracts/${sale.json().id}`, headers,
+      payload: {
+        counterpartyId: 'd1000000-0000-4000-8000-000000000005', reference: 'CV-2026-0043',
+        commodity: 'MILHO', quantityKg: '10000.000', salePricePerKg: '1.600000',
+        destinationCode: 'IND_PR_01', deliveryStart: '2026-10-05', deliveryEnd: '2026-10-31',
+        requiredDocuments: ['Nota fiscal'],
+      },
+    });
+    expect(amended.statusCode, amended.body).toBe(200);
+    const history = await server.inject({
+      method: 'GET', url: `/v1/inventory/sales-contracts/${sale.json().id}/versions`, headers,
+    });
+    expect(history.json().versions).toMatchObject([
+      { version_number: 2, terms: { salePricePerKg: '1.600000' } },
+      { version_number: 1, terms: { salePricePerKg: '1.500000' } },
+    ]);
+    const unknownHistory = await server.inject({
+      method: 'GET', url: '/v1/inventory/sales-contracts/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/versions', headers,
+    });
+    expect(unknownHistory.statusCode).toBe(404);
 
     const allocation = await server.inject({
       method: 'POST', url: '/v1/inventory/allocations', headers,

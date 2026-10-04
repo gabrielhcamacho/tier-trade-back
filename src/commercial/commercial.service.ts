@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { DatabasePlatformPort } from '../database/database.js';
 import { calculateProjectedMargin, decideSubmission } from '../domain/pricing.js';
-import type { CancelOfferInput, CreateCounterpartyInput, CreateOfferInput, MarginPolicyInput } from './commercial.schemas.js';
+import type { CancelOfferInput, CreateCounterpartyInput, CreateOfferInput, MarginPolicyInput, UpdateCounterpartyProfileInput } from './commercial.schemas.js';
 
 interface MarginPolicyRow {
   id: string;
@@ -20,9 +20,10 @@ export class CommercialService {
   async listCounterparties(tenantId: string, actorId: string) {
     return this.db.transaction(tenantId, async (client) => {
       await this.assertMember(client, tenantId, actorId);
-      const result = await client.query<{ id: string; legal_name: string }>(
-        `SELECT id,legal_name FROM app.counterparties WHERE tenant_id=$1 ORDER BY legal_name,id`, [tenantId]);
-      return result.rows.map((row) => ({ id: row.id, legalName: row.legal_name }));
+      const result = await client.query<{ id: string; legal_name: string; tax_id: string; party_type: string }>(
+        `SELECT id,legal_name,tax_id,party_type FROM app.counterparties WHERE tenant_id=$1 ORDER BY legal_name,id`, [tenantId]);
+      return result.rows.map((row) => ({ id: row.id, legalName: row.legal_name,
+        taxIdLength: row.tax_id.length, taxIdLast4: row.tax_id.slice(-4), partyType: row.party_type }));
     });
   }
 
@@ -32,9 +33,9 @@ export class CommercialService {
       const counterpartyId = randomUUID();
       try {
         await client.query(
-          `INSERT INTO app.counterparties (tenant_id,id,legal_name,tax_id)
-           VALUES ($1,$2,$3,$4)`,
-          [tenantId, counterpartyId, input.legalName, input.taxId],
+          `INSERT INTO app.counterparties (tenant_id,id,legal_name,tax_id,party_type)
+           VALUES ($1,$2,$3,$4,$5)`,
+          [tenantId, counterpartyId, input.legalName, input.taxId, input.partyType],
         );
       } catch (cause) {
         if (typeof cause === 'object' && cause !== null && 'code' in cause && cause.code === '23505') {
@@ -43,8 +44,32 @@ export class CommercialService {
         throw cause;
       }
       await this.record(client, tenantId, actorId, 'counterparty.created', 'counterparty', counterpartyId,
-        { legalName: input.legalName });
-      return { id: counterpartyId, legalName: input.legalName, taxId: input.taxId };
+        { legalName: input.legalName, partyType: input.partyType });
+      return { id: counterpartyId, legalName: input.legalName, taxId: input.taxId,
+        partyType: input.partyType };
+    });
+  }
+
+  async updateCounterpartyProfile(tenantId: string, actorId: string, counterpartyId: string,
+    input: UpdateCounterpartyProfileInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'COMMERCIAL_EDIT');
+      const counterparty = await this.db.one<{ legal_name: string; tax_id: string; party_type: string }>(client,
+        `SELECT legal_name,tax_id,party_type FROM app.counterparties
+          WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenantId, counterpartyId]);
+      const expectedLength = input.partyType === 'PERSON' ? 11 : 14;
+      if (counterparty.tax_id.length !== expectedLength) {
+        throw new UnprocessableEntityException({ code: 'PARTY_TYPE_TAX_ID_MISMATCH' });
+      }
+      if (counterparty.party_type !== input.partyType) {
+        await client.query(
+          `UPDATE app.counterparties SET party_type=$3 WHERE tenant_id=$1 AND id=$2`,
+          [tenantId, counterpartyId, input.partyType]);
+        await this.record(client, tenantId, actorId, 'counterparty.profile_changed', 'counterparty', counterpartyId,
+          { previousPartyType: counterparty.party_type, partyType: input.partyType });
+      }
+      return { id: counterpartyId, legalName: counterparty.legal_name,
+        taxId: counterparty.tax_id, partyType: input.partyType };
     });
   }
 
@@ -53,6 +78,7 @@ export class CommercialService {
     const pricing = calculateProjectedMargin(input);
     return this.db.transaction(tenantId, async (client) => {
       await this.assertCapability(client, tenantId, actorId, 'COMMERCIAL_EDIT');
+      await this.assertClassifiedCounterparty(client, tenantId, input.counterpartyId);
       const policy = await this.db.one<MarginPolicyRow>(
         client,
         `SELECT id, version, auto_approval_margin_per_sc, absolute_floor_margin_per_sc
@@ -88,6 +114,7 @@ export class CommercialService {
     const pricing = calculateProjectedMargin(input);
     return this.db.transaction(tenantId, async (client) => {
       await this.assertCapability(client, tenantId, actorId, 'COMMERCIAL_EDIT');
+      await this.assertClassifiedCounterparty(client, tenantId, input.counterpartyId);
       const offer = await this.db.one<{ status: string; created_by: string }>(client,
         'SELECT status,created_by FROM app.offers WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [tenantId, offerId]);
       if (offer.status !== 'DRAFT') throw new ConflictException({ code: 'ONLY_DRAFT_OFFERS_CAN_BE_EDITED' });
@@ -145,7 +172,7 @@ export class CommercialService {
     });
   }
 
-  async currentMarginPolicy(tenantId: string, actorId: string, commodity: 'MILHO') {
+  async currentMarginPolicy(tenantId: string, actorId: string, commodity: 'MILHO' | 'SOJA') {
     return this.db.transaction(tenantId, async (client) => {
       await this.assertMember(client, tenantId, actorId);
       const result = await client.query<MarginPolicyRow>(
@@ -378,6 +405,16 @@ export class CommercialService {
       `SELECT id,version,auto_approval_margin_per_sc,absolute_floor_margin_per_sc
          FROM app.margin_policies WHERE tenant_id=$1 AND commodity=$2 AND active=true`,
       [tenantId, commodity]);
+  }
+
+  private async assertClassifiedCounterparty(client: PoolClient, tenantId: string, counterpartyId: string) {
+    const counterparty = await client.query<{ party_type: string }>(
+      'SELECT party_type FROM app.counterparties WHERE tenant_id=$1 AND id=$2',
+      [tenantId, counterpartyId]);
+    if (counterparty.rowCount !== 1) throw new NotFoundException({ code: 'COUNTERPARTY_NOT_FOUND' });
+    if (counterparty.rows[0]?.party_type === 'UNCLASSIFIED') {
+      throw new UnprocessableEntityException({ code: 'COUNTERPARTY_PROFILE_REQUIRED' });
+    }
   }
 
   private async record(client: PoolClient, tenantId: string, actorId: string, eventType: string,

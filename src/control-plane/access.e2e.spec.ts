@@ -51,7 +51,12 @@ describe.runIf(Boolean(databaseUrl))('control plane access with PostgreSQL', () 
     ]) {
       await pool.query(await readFile(new URL(`../../supabase/migrations/${migrationName}`, import.meta.url), 'utf8'));
     }
-    await pool.query(await readFile(new URL('../../scripts/seed-local.sql', import.meta.url), 'utf8'));
+    await pool.query(
+      `INSERT INTO app.tenants (id,legal_name,timezone)
+       VALUES ($1,'Tenant local','America/Sao_Paulo')`, [tenantId]);
+    await pool.query(
+      `INSERT INTO app.memberships (tenant_id,user_id,capabilities)
+       VALUES ($1,$2,ARRAY['ACCESS_MANAGE','COMMERCIAL_EDIT'])`, [tenantId, adminId]);
     db = new TenantDatabase(pool);
     provisioning = new FakeIdentityProvisioning();
     service = new AccessService(db, provisioning);

@@ -3,6 +3,7 @@
 | Evento | Agregado | Quando | Consumidores previstos |
 |---|---|---|---|
 | `offer.created` | offer | oferta e cenário persistidos | auditoria, projeções |
+| `counterparty.profile_changed` | counterparty | usuário confirma perfil antes não classificado | auditoria comercial |
 | `offer.submitted` | offer | política de margem aplicada | fila de trabalho comercial |
 | `offer.approved` | offer | aprovador decide exceção | fila de contratos |
 | `contract.activated` | contract | contrato e obrigações criados | execução física futura |

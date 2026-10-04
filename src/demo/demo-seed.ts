@@ -209,12 +209,12 @@ async function clearOperationalData(client: PoolClient, tenantId: string, actorI
 async function seedOperationalData(client: PoolClient, input: ResetDemoTenantInput): Promise<void> {
   const { tenantId, actorId } = input;
   await client.query(
-    `INSERT INTO app.counterparties (tenant_id,id,legal_name,tax_id,created_at) VALUES
-      ($1,$2,'Fazenda Boa Esperança — Dado fictício','99000000000101','2026-09-08T13:00:00Z'),
-      ($1,$3,'Cooperativa Vale do Cerrado — Dado fictício','99000000000102','2026-09-10T14:30:00Z'),
-      ($1,$4,'Agropecuária Santa Luzia — Dado fictício','99000000000103','2026-09-15T12:00:00Z'),
-      ($1,$5,'Cerealista Rio Verde — Dado fictício','99000000000104','2026-09-18T15:45:00Z'),
-      ($1,$6,'Indústria Alimentícia Horizonte — Dado fictício','99000000000105','2026-09-20T13:20:00Z')`,
+    `INSERT INTO app.counterparties (tenant_id,id,legal_name,tax_id,party_type,created_at) VALUES
+      ($1,$2,'Fazenda Boa Esperança — Dado fictício','99000000000101','COMPANY','2026-09-08T13:00:00Z'),
+      ($1,$3,'Cooperativa Vale do Cerrado — Dado fictício','99000000000102','COOPERATIVE','2026-09-10T14:30:00Z'),
+      ($1,$4,'Agropecuária Santa Luzia — Dado fictício','99000000000103','COMPANY','2026-09-15T12:00:00Z'),
+      ($1,$5,'Cerealista Rio Verde — Dado fictício','99000000000104','COMPANY','2026-09-18T15:45:00Z'),
+      ($1,$6,'Indústria Alimentícia Horizonte — Dado fictício','99000000000105','COMPANY','2026-09-20T13:20:00Z')`,
     [tenantId, ...ids.counterparties],
   );
   await client.query(

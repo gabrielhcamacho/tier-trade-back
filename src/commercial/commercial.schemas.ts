@@ -2,18 +2,28 @@ import { z } from 'zod';
 
 const decimalString = z.string().regex(/^\d+(?:\.\d{1,6})?$/, 'Expected a non-negative decimal string.');
 const localDate = z.iso.date();
+export const commoditySchema = z.enum(['MILHO', 'SOJA']);
+export const partyTypeSchema = z.enum(['PERSON', 'COMPANY', 'COOPERATIVE']);
 
 export const createCounterpartySchema = z.object({
   legalName: z.string().trim().min(3).max(200),
   taxId: z.string().trim().transform((value) => value.replace(/\D/g, ''))
     .pipe(z.string().min(11).max(14)),
+  partyType: partyTypeSchema,
+}).superRefine((value, context) => {
+  const expectedLength = value.partyType === 'PERSON' ? 11 : 14;
+  if (value.taxId.length !== expectedLength) {
+    context.addIssue({ code: 'custom', path: ['taxId'], message: 'Tax ID length does not match party type.' });
+  }
 });
+
+export const updateCounterpartyProfileSchema = z.object({ partyType: partyTypeSchema });
 
 export type CreateCounterpartyInput = z.infer<typeof createCounterpartySchema>;
 
 export const createOfferSchema = z.object({
   counterpartyId: z.uuid(),
-  commodity: z.literal('MILHO'),
+  commodity: commoditySchema,
   unit: z.literal('SC_60KG'),
   quantitySc: decimalString,
   deliveryStart: localDate,
@@ -35,10 +45,11 @@ export const cancelOfferSchema = z.object({
 });
 
 export const marginPolicySchema = z.object({
-  commodity: z.literal('MILHO'),
+  commodity: commoditySchema,
   autoApprovalMarginPerSc: decimalString,
   absoluteFloorMarginPerSc: decimalString,
 });
 
 export type CancelOfferInput = z.infer<typeof cancelOfferSchema>;
 export type MarginPolicyInput = z.infer<typeof marginPolicySchema>;
+export type UpdateCounterpartyProfileInput = z.infer<typeof updateCounterpartyProfileSchema>;

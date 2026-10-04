@@ -50,6 +50,32 @@ paths:
     get:
       summary: Lista contrapartes do tenant resolvido
       responses: { '200': { description: Contrapartes disponíveis } }
+    post:
+      summary: Cadastra contraparte com perfil explicitamente confirmado
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateCounterparty' } } }
+      responses:
+        '201': { description: Contraparte cadastrada }
+        '400': { description: Tipo incompatível com comprimento do CPF/CNPJ }
+        '409': { description: Documento já cadastrado no tenant }
+  /v1/counterparties/{counterpartyId}/profile:
+    patch:
+      summary: Classifica contraparte legada sem inferir cooperativa pelo CNPJ
+      parameters:
+        - { name: counterpartyId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [partyType]
+              properties:
+                partyType: { enum: [PERSON, COMPANY, COOPERATIVE] }
+      responses:
+        '200': { description: Perfil confirmado e auditado }
+        '422': { description: Perfil incompatível com documento existente }
   /v1/offers:
     post:
       summary: Registra uma oferta e seu cenário determinístico
@@ -167,15 +193,23 @@ paths:
         '409': { description: Referência já utilizada }
   /v1/inventory/sales-contracts/{contractId}:
     put:
-      summary: Atualiza contrato de venda sem reduzir abaixo do volume alocado
+      summary: Atualiza contrato operacional de venda, preservando a versão anterior; não formaliza aditivo assinado
       parameters:
         - { name: contractId, in: path, required: true, schema: { type: string, format: uuid } }
       requestBody:
         required: true
         content: { application/json: { schema: { $ref: '#/components/schemas/SalesContractInput' } } }
       responses:
-        '200': { description: Contrato atualizado }
+        '200': { description: Contrato atualizado e nova versão registrada }
         '422': { description: Volume inferior ao saldo já alocado }
+  /v1/inventory/sales-contracts/{contractId}/versions:
+    get:
+      summary: Lista snapshots imutáveis dos termos operacionais, do mais recente ao mais antigo
+      parameters:
+        - { name: contractId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Versões do contrato acessíveis somente ao tenant autenticado }
+        '404': { description: Contrato inexistente no tenant }
   /v1/inventory/allocations:
     post:
       summary: Reserva saldo disponível de um lote para contrato de venda
@@ -424,6 +458,10 @@ paths:
     get:
       summary: Retorna a política ativa de margem do milho
       responses: { '200': { description: Política ativa } }
+  /v1/settings/margin-policy/SOJA:
+    get:
+      summary: Retorna a política ativa de margem da soja
+      responses: { '200': { description: Política ativa ou null quando ainda não configurada } }
   /v1/settings/margin-policy:
     patch:
       summary: Publica nova versão da política de margem
@@ -435,7 +473,7 @@ paths:
               type: object
               required: [commodity, autoApprovalMarginPerSc, absoluteFloorMarginPerSc]
               properties:
-                commodity: { const: MILHO }
+                commodity: { enum: [MILHO, SOJA] }
                 autoApprovalMarginPerSc: { $ref: '#/components/schemas/DecimalString' }
                 absoluteFloorMarginPerSc: { $ref: '#/components/schemas/DecimalString' }
       responses:
@@ -455,13 +493,21 @@ components:
       type: string
       enum: [COMMERCIAL_EDIT, COMMERCIAL_APPROVE, COMMERCIAL_CANCEL, MARGIN_POLICY_MANAGE, ACCESS_MANAGE, OPERATIONS_EDIT, FINANCE_EDIT, FISCAL_EDIT, RISK_MANAGE]
     DecimalString: { type: string, pattern: '^\d+(?:\.\d{1,6})?$' }
+    CreateCounterparty:
+      type: object
+      additionalProperties: false
+      required: [legalName, taxId, partyType]
+      properties:
+        legalName: { type: string, minLength: 3, maxLength: 200 }
+        taxId: { type: string, description: CPF ou CNPJ com ou sem pontuação }
+        partyType: { enum: [PERSON, COMPANY, COOPERATIVE] }
     CreateOffer:
       type: object
       additionalProperties: false
       required: [counterpartyId, commodity, unit, quantitySc, deliveryStart, deliveryEnd, purchasePricePerSc, saleReferencePerSc, costs]
       properties:
         counterpartyId: { type: string, format: uuid }
-        commodity: { const: MILHO }
+        commodity: { enum: [MILHO, SOJA] }
         unit: { const: SC_60KG }
         quantitySc: { $ref: '#/components/schemas/DecimalString' }
         deliveryStart: { type: string, format: date }
@@ -499,7 +545,7 @@ components:
       properties:
         counterpartyId: { type: string, format: uuid }
         reference: { type: string, minLength: 3, maxLength: 40 }
-        commodity: { const: MILHO }
+        commodity: { enum: [MILHO, SOJA] }
         quantityKg: { $ref: '#/components/schemas/DecimalString' }
         salePricePerKg: { $ref: '#/components/schemas/DecimalString' }
         destinationCode: { type: string, pattern: '^[A-Z0-9][A-Z0-9_-]{1,31}$' }
@@ -558,7 +604,7 @@ components:
       additionalProperties: false
       required: [commodity, maxNetOpenKg, warningThresholdPct]
       properties:
-        commodity: { const: MILHO }
+        commodity: { enum: [MILHO, SOJA] }
         maxNetOpenKg: { type: string, pattern: '^\d+(?:\.\d{1,3})?$' }
         warningThresholdPct: { type: string, pattern: '^\d+(?:\.\d{1,2})?$' }
     CreateFiscalDocument:

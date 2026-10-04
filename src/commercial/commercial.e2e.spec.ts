@@ -46,6 +46,8 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     await setup.query(await readFile(new URL('../../supabase/migrations/20261003011929_fiscal_calculation_engine.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261003014022_fiscal_obligations_and_financial_effects.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261003194521_fiscal_payments_and_cash_flow.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261004155718_phase1_commodity_and_counterparty_profile.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261004164744_sales_contract_versions.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../scripts/seed-local.sql', import.meta.url), 'utf8'));
     await setup.end();
 
@@ -81,10 +83,10 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
 
     const counterparty = await server.inject({
       method: 'POST', url: '/v1/counterparties', headers: identityHeaders,
-      payload: { legalName: 'Cooperativa Teste do Cerrado', taxId: '12.345.678/0001-90' },
+      payload: { legalName: 'Cooperativa Teste do Cerrado', taxId: '12.345.678/0001-90', partyType: 'COOPERATIVE' },
     });
     expect(counterparty.statusCode).toBe(201);
-    expect(counterparty.json()).toMatchObject({ legalName: 'Cooperativa Teste do Cerrado', taxId: '12345678000190' });
+    expect(counterparty.json()).toMatchObject({ legalName: 'Cooperativa Teste do Cerrado', taxId: '12345678000190', partyType: 'COOPERATIVE' });
 
     const policy = await server.inject({
       method: 'PATCH', url: '/v1/settings/margin-policy', headers: identityHeaders,
@@ -392,5 +394,93 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     expect(isolated.rows[0]?.published_at).toBeNull();
     expect(await processor.processTenant(otherTenantId)).toMatchObject({ claimed: 1, published: 1, failed: 0 });
     await verification.end();
+  });
+
+  it('keeps counterparty classification explicit and prices soybean independently', async () => {
+    const server = app.getHttpAdapter().getInstance();
+    const mismatch = await server.inject({
+      method: 'POST', url: '/v1/counterparties', headers: identityHeaders,
+      payload: { legalName: 'Produtor Pessoa Física', taxId: '12345678909', partyType: 'COOPERATIVE' },
+    });
+    expect(mismatch.statusCode).toBe(400);
+
+    const person = await server.inject({
+      method: 'POST', url: '/v1/counterparties', headers: identityHeaders,
+      payload: { legalName: 'Produtor Pessoa Física', taxId: '12345678909', partyType: 'PERSON' },
+    });
+    expect(person.statusCode, person.body).toBe(201);
+    expect(person.json()).toMatchObject({ partyType: 'PERSON', taxId: '12345678909' });
+
+    const legacyId = '99999999-9999-4999-8999-999999999999';
+    const verification = new Pool({ connectionString: databaseUrl });
+    await verification.query(
+      `INSERT INTO app.counterparties (tenant_id,id,legal_name,tax_id)
+       VALUES ($1,$2,'Contraparte legada','99000000000999')`,
+      [identityHeaders['x-tenant-id'], legacyId]);
+    await verification.end();
+    const before = await server.inject({ method: 'GET', url: '/v1/counterparties', headers: identityHeaders });
+    expect(before.json()).toContainEqual(expect.objectContaining({ id: legacyId, partyType: 'UNCLASSIFIED' }));
+    expect(before.json().find((item: { id: string }) => item.id === legacyId)).not.toHaveProperty('taxId');
+    const blockedLegacySale = await server.inject({
+      method: 'POST', url: '/v1/inventory/sales-contracts', headers: identityHeaders,
+      payload: {
+        counterpartyId: legacyId, reference: 'LEGACY-BLOCKED', commodity: 'SOJA',
+        quantityKg: '6000.000', salePricePerKg: '2.500000', destinationCode: 'ARM_MT_01',
+        deliveryStart: '2026-11-01', deliveryEnd: '2026-11-30', requiredDocuments: [], paymentTermDays: 7,
+      },
+    });
+    expect(blockedLegacySale.statusCode).toBe(422);
+    expect(blockedLegacySale.json()).toMatchObject({ code: 'COUNTERPARTY_PROFILE_REQUIRED' });
+    const classified = await server.inject({
+      method: 'PATCH', url: `/v1/counterparties/${legacyId}/profile`, headers: identityHeaders,
+      payload: { partyType: 'COMPANY' },
+    });
+    expect(classified.statusCode, classified.body).toBe(200);
+    expect(classified.json().partyType).toBe('COMPANY');
+
+    const missingPolicy = await server.inject({
+      method: 'GET', url: '/v1/settings/margin-policy/SOJA', headers: identityHeaders,
+    });
+    expect(missingPolicy.json()).toBeNull();
+    const policy = await server.inject({
+      method: 'PATCH', url: '/v1/settings/margin-policy', headers: identityHeaders,
+      payload: { commodity: 'SOJA', autoApprovalMarginPerSc: '6.00', absoluteFloorMarginPerSc: '2.00' },
+    });
+    expect(policy.statusCode, policy.body).toBe(200);
+    expect(policy.json()).toMatchObject({ commodity: 'SOJA', version: 1 });
+    const offer = await server.inject({
+      method: 'POST', url: '/v1/offers', headers: identityHeaders,
+      payload: {
+        counterpartyId: person.json().id, commodity: 'SOJA', unit: 'SC_60KG', quantitySc: '1200',
+        deliveryStart: '2026-11-01', deliveryEnd: '2026-11-30', purchasePricePerSc: '100.00',
+        saleReferencePerSc: '110.00', costs: [{ code: 'FREIGHT', amountPerSc: '3.00' }],
+      },
+    });
+    expect(offer.statusCode, offer.body).toBe(201);
+    expect(offer.json().pricing.projectedMarginPerSc).toBe('7.00');
+    const submitted = await server.inject({
+      method: 'POST', url: `/v1/offers/${offer.json().offerId}/submit`, headers: identityHeaders,
+    });
+    expect(submitted.json()).toMatchObject({ status: 'APPROVED', decision: 'AUTO_APPROVED' });
+    const activated = await server.inject({
+      method: 'POST', url: `/v1/offers/${offer.json().offerId}/activate-contract`, headers: identityHeaders,
+    });
+    expect(activated.statusCode, activated.body).toBe(201);
+    const summary = await server.inject({
+      method: 'GET', url: `/v1/contracts/${activated.json().contractId}/summary`, headers: identityHeaders,
+    });
+    expect(summary.json()).toMatchObject({ commodity: 'SOJA', projected_margin_per_sc: '7.000000' });
+
+    const sale = await server.inject({
+      method: 'POST', url: '/v1/inventory/sales-contracts', headers: identityHeaders,
+      payload: {
+        counterpartyId: legacyId, reference: 'SOJA-TESTE-001', commodity: 'SOJA',
+        quantityKg: '6000.000', salePricePerKg: '2.500000', destinationCode: 'ARM_MT_01',
+        deliveryStart: '2026-11-01', deliveryEnd: '2026-11-30', requiredDocuments: [],
+        paymentTermDays: 7,
+      },
+    });
+    expect(sale.statusCode, sale.body).toBe(201);
+    expect(sale.json()).toMatchObject({ commodity: 'SOJA' });
   });
 });
