@@ -206,6 +206,31 @@ paths:
       parameters:
         - { name: loadId, in: path, required: true, schema: { type: string, format: uuid } }
       responses: { '200': { description: Detalhe operacional da carga } }
+  /v1/loads/{loadId}/schedule:
+    put:
+      summary: Reprograma carga ainda não recebida e recalcula a reserva contratual
+      description: Exige OPERATIONS_EDIT. Preserva programação anterior em auditoria e outbox.
+      parameters:
+        - { name: loadId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/RescheduleLoad' } } }
+      responses:
+        '200': { description: Carga atualizada com contractBalanceKg }
+        '409': { description: Carga não programada ou já com recebimento }
+        '422': { description: Janela ou saldo contratual inválido }
+  /v1/loads/{loadId}/cancel:
+    post:
+      summary: Cancela carga ainda não recebida e libera o peso reservado
+      description: Exige OPERATIONS_EDIT. Preserva carga cancelada na agenda e motivo na auditoria.
+      parameters:
+        - { name: loadId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CancelLoad' } } }
+      responses:
+        '201': { description: Carga cancelada }
+        '409': { description: Carga não programada ou já com recebimento }
   /v1/loads/{loadId}/start-receiving:
     post:
       summary: Move uma carga programada para recebimento
@@ -540,6 +565,23 @@ components:
       required: true
       schema: { type: string, format: uuid }
   schemas:
+    RescheduleLoad:
+      type: object
+      additionalProperties: false
+      required: [scheduledLocal, expectedWeightKg, vehiclePlate, carrierName, destinationCode, reason]
+      properties:
+        scheduledLocal: { type: string, pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$', description: Horário local no fuso do tenant }
+        expectedWeightKg: { type: string, pattern: '^\d+(?:\.\d{1,3})?$' }
+        vehiclePlate: { type: string, description: Placa brasileira normalizada no backend }
+        carrierName: { type: string, minLength: 2, maxLength: 200 }
+        destinationCode: { type: string, pattern: '^[A-Z0-9][A-Z0-9_-]{1,31}$' }
+        reason: { type: string, minLength: 10, maxLength: 500 }
+    CancelLoad:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 10, maxLength: 500 }
     Capability:
       type: string
       enum: [COMMERCIAL_EDIT, COMMERCIAL_APPROVE, COMMERCIAL_CANCEL, MARGIN_POLICY_MANAGE, ACCESS_MANAGE, OPERATIONS_EDIT, FINANCE_EDIT, FISCAL_EDIT, RISK_MANAGE]

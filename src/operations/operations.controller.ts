@@ -4,9 +4,13 @@ import { Identity, type RequestIdentity, RequestIdentityGuard } from '../auth/re
 import { SchemaPipe } from '../common/schema.pipe.js';
 import { OperationsService } from './operations.service.js';
 import {
+  cancelLoadSchema,
   recordLoadReceiptSchema,
+  rescheduleLoadSchema,
   scheduleLoadSchema,
+  type CancelLoadInput,
   type RecordLoadReceiptInput,
+  type RescheduleLoadInput,
   type ScheduleLoadInput,
 } from './operations.schemas.js';
 
@@ -40,6 +44,20 @@ export class OperationsController {
   startReceiving(@Identity() identity: RequestIdentity,
     @Param('loadId', ParseUUIDPipe) loadId: string) {
     return this.service.startReceiving(identity.tenantId, identity.actorId, loadId);
+  }
+
+  @Put('loads/:loadId/schedule')
+  reschedule(@Identity() identity: RequestIdentity,
+    @Param('loadId', ParseUUIDPipe) loadId: string,
+    @Body(new SchemaPipe(rescheduleLoadSchema)) input: RescheduleLoadInput) {
+    return this.service.rescheduleLoad(identity.tenantId, identity.actorId, loadId, input);
+  }
+
+  @Post('loads/:loadId/cancel')
+  cancel(@Identity() identity: RequestIdentity,
+    @Param('loadId', ParseUUIDPipe) loadId: string,
+    @Body(new SchemaPipe(cancelLoadSchema)) input: CancelLoadInput) {
+    return this.service.cancelLoad(identity.tenantId, identity.actorId, loadId, input);
   }
 
   @Put('loads/:loadId/receipt')

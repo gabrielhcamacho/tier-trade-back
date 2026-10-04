@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { DatabasePlatformPort } from '../database/database.js';
 import { InventoryReceiptPort } from '../inventory/inventory.port.js';
-import type { RecordLoadReceiptInput, ScheduleLoadInput } from './operations.schemas.js';
+import type { CancelLoadInput, RecordLoadReceiptInput, RescheduleLoadInput, ScheduleLoadInput } from './operations.schemas.js';
 
 interface ContractForScheduling {
   status: string;
@@ -116,6 +116,122 @@ export class OperationsService {
     });
   }
 
+  async rescheduleLoad(tenantId: string, actorId: string, loadId: string, input: RescheduleLoadInput) {
+    const expectedWeight = new Decimal(input.expectedWeightKg);
+    if (!expectedWeight.isPositive()) {
+      throw new UnprocessableEntityException({ code: 'LOAD_WEIGHT_MUST_BE_POSITIVE' });
+    }
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'OPERATIONS_EDIT');
+      const load = await this.lockScheduledLoad(client, tenantId, loadId, input.scheduledLocal);
+      const contract = load.contract;
+      if (contract.status !== 'ACTIVE') throw new ConflictException({ code: 'CONTRACT_NOT_ACTIVE' });
+      if (contract.scheduled_local_date < contract.delivery_start
+        || contract.scheduled_local_date > contract.delivery_end) {
+        throw new UnprocessableEntityException({
+          code: 'LOAD_OUTSIDE_CONTRACT_DELIVERY_WINDOW',
+          scheduledLocalDate: contract.scheduled_local_date,
+          deliveryStart: contract.delivery_start,
+          deliveryEnd: contract.delivery_end,
+          timezone: contract.timezone,
+        });
+      }
+      const scheduled = await client.query<{ scheduled_weight_kg: string }>(
+        `SELECT COALESCE(sum(expected_weight_kg),0)::text AS scheduled_weight_kg
+           FROM app.loads
+          WHERE tenant_id=$1 AND contract_id=$2 AND id<>$3 AND status<>'CANCELLED'`,
+        [tenantId, load.row.contract_id, loadId],
+      );
+      const availableWeight = new Decimal(contract.quantity_sc).mul(60)
+        .minus(scheduled.rows[0]?.scheduled_weight_kg ?? '0');
+      if (expectedWeight.greaterThan(availableWeight)) {
+        throw new UnprocessableEntityException({
+          code: 'LOAD_EXCEEDS_CONTRACT_BALANCE',
+          availableWeightKg: availableWeight.toFixed(3),
+        });
+      }
+      const updated = await client.query<LoadRow>(
+        `UPDATE app.loads
+            SET scheduled_at=$3,expected_weight_kg=$4,vehicle_plate=$5,carrier_name=$6,
+                destination_code=$7,updated_at=now()
+          WHERE tenant_id=$1 AND id=$2
+          RETURNING id,contract_id,scheduled_at,expected_weight_kg,vehicle_plate,
+                    carrier_name,destination_code,status,created_at`,
+        [tenantId, loadId, contract.scheduled_at, input.expectedWeightKg,
+          input.vehiclePlate, input.carrierName, input.destinationCode],
+      );
+      await this.record(client, tenantId, actorId, 'load.rescheduled', loadId, {
+        reason: input.reason,
+        previous: this.scheduleSnapshot(load.row),
+        current: this.scheduleSnapshot(updated.rows[0]!),
+      });
+      return {
+        ...this.presentLoad(updated.rows[0]!, contract.timezone),
+        contractBalanceKg: availableWeight.minus(expectedWeight).toFixed(3),
+      };
+    });
+  }
+
+  async cancelLoad(tenantId: string, actorId: string, loadId: string, input: CancelLoadInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'OPERATIONS_EDIT');
+      const load = await this.lockScheduledLoad(client, tenantId, loadId, '2000-01-01T00:00');
+      const updated = await client.query<LoadRow>(
+        `UPDATE app.loads SET status='CANCELLED',updated_at=now()
+          WHERE tenant_id=$1 AND id=$2
+          RETURNING id,contract_id,scheduled_at,expected_weight_kg,vehicle_plate,
+                    carrier_name,destination_code,status,created_at`,
+        [tenantId, loadId],
+      );
+      await this.record(client, tenantId, actorId, 'load.cancelled', loadId, {
+        reason: input.reason,
+        previous: this.scheduleSnapshot(load.row),
+        releasedWeightKg: load.row.expected_weight_kg,
+      });
+      return this.presentLoad(updated.rows[0]!, load.contract.timezone);
+    });
+  }
+
+  private async lockScheduledLoad(client: PoolClient, tenantId: string, loadId: string,
+    scheduledLocal: string): Promise<{ row: LoadRow; contract: ContractForScheduling }> {
+    // Lock the contract before the load: scheduling uses the same order and serializes balance checks.
+    const target = await client.query<{ contract_id: string }>(
+      `SELECT contract_id FROM app.loads WHERE tenant_id=$1 AND id=$2`, [tenantId, loadId],
+    );
+    if (!target.rows[0]) throw new NotFoundException({ code: 'LOAD_NOT_FOUND' });
+    const contract = await this.contractForScheduling(client, tenantId,
+      target.rows[0].contract_id, scheduledLocal);
+    const result = await client.query<LoadRow>(
+      `SELECT id,contract_id,scheduled_at,expected_weight_kg,vehicle_plate,
+              carrier_name,destination_code,status,created_at
+         FROM app.loads WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+      [tenantId, loadId],
+    );
+    const row = result.rows[0];
+    if (!row || row.contract_id !== target.rows[0].contract_id) {
+      throw new NotFoundException({ code: 'LOAD_NOT_FOUND' });
+    }
+    if (row.status !== 'SCHEDULED') {
+      throw new ConflictException({ code: 'LOAD_NOT_SCHEDULED', status: row.status });
+    }
+    const receipts = await client.query(
+      `SELECT 1 FROM app.load_receipts WHERE tenant_id=$1 AND load_id=$2 LIMIT 1`,
+      [tenantId, loadId],
+    );
+    if (receipts.rowCount) throw new ConflictException({ code: 'LOAD_HAS_RECEIPT' });
+    return { row, contract };
+  }
+
+  private scheduleSnapshot(row: LoadRow) {
+    return {
+      scheduledAt: row.scheduled_at.toISOString(),
+      expectedWeightKg: row.expected_weight_kg,
+      vehiclePlate: row.vehicle_plate,
+      carrierName: row.carrier_name,
+      destinationCode: row.destination_code,
+    };
+  }
+
   listContractLoads(tenantId: string, actorId: string, contractId: string) {
     return this.db.transaction(tenantId, async (client) => {
       await this.assertMember(client, tenantId, actorId);
@@ -180,26 +296,21 @@ export class OperationsService {
         [tenantId, loadId],
       );
       const receiptHistory = receipts.rows.map((row) => this.presentReceipt(row));
+      const audit = await client.query<{ event_type: string; payload: Record<string, unknown>; occurred_at: Date }>(
+        `SELECT event_type,payload,occurred_at FROM app.audit_events
+          WHERE tenant_id=$1 AND aggregate_type='load' AND aggregate_id=$2
+          ORDER BY occurred_at DESC,id DESC`,
+        [tenantId, loadId],
+      );
       return {
         ...this.presentLoad(result.rows[0]),
         receipt: receiptHistory[0] ?? null,
         receiptHistory,
-        events: [
-          ...receiptHistory.map((receipt) => ({
-            type: receipt.version === 1 ? 'load.receipt_recorded' : 'load.receipt_corrected',
-            payload: {
-              version: receipt.version,
-              netWeightKg: receipt.netWeightKg,
-              qualityDecision: receipt.qualityDecision,
-            },
-            occurredAt: receipt.createdAt,
-          })),
-          {
-            type: 'load.scheduled',
-            payload: { expectedWeightKg: result.rows[0]!.expected_weight_kg },
-            occurredAt: result.rows[0]!.created_at.toISOString(),
-          },
-        ],
+        events: audit.rows.map((event) => ({
+          type: event.event_type,
+          payload: event.payload,
+          occurredAt: event.occurred_at.toISOString(),
+        })),
       };
     });
   }

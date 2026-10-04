@@ -27,6 +27,8 @@ Antes de iniciar um processo compartilhado ou de produção, execute `TIER_TRADE
 
 `POST /v1/contracts/:contractId/loads` exige `OPERATIONS_EDIT` e programa uma carga no fuso do tenant. `GET /v1/contracts/:contractId/loads` retorna a agenda e o saldo de peso; `GET /v1/loads/:loadId` retorna o detalhe. A programação rejeita contratos inativos, datas fora da janela e peso acima do saldo.
 
+`PUT /v1/loads/:loadId/schedule` reprograma somente cargas `SCHEDULED`, com motivo obrigatório, janela e saldo verificados transacionalmente. `POST /v1/loads/:loadId/cancel` libera a reserva, mantém a carga no histórico e exige motivo. Ambos rejeitam cargas que já iniciaram recebimento ou possuem pesagem; as alterações são auditadas e enviadas à outbox.
+
 Sondas operacionais: `GET /health/live` verifica o processo e `GET /health/ready` verifica o banco.
 
 Leia `docs/first-slice.md` e `docs/second-slice.md` antes de ampliar o domínio.

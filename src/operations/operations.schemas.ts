@@ -16,6 +16,14 @@ export const scheduleLoadSchema = z.object({
 
 export type ScheduleLoadInput = z.infer<typeof scheduleLoadSchema>;
 
+export const rescheduleLoadSchema = scheduleLoadSchema.extend({
+  reason: z.string().trim().min(10).max(500),
+});
+export type RescheduleLoadInput = z.infer<typeof rescheduleLoadSchema>;
+
+export const cancelLoadSchema = z.object({ reason: z.string().trim().min(10).max(500) });
+export type CancelLoadInput = z.infer<typeof cancelLoadSchema>;
+
 const percentageDecimal = z.string()
   .regex(/^\d+(?:\.\d{1,4})?$/, 'Expected a percentage with up to four decimal places.')
   .refine((value) => Number(value) <= 100, 'Percentage cannot exceed 100.');

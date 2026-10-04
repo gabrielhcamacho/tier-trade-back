@@ -180,11 +180,85 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
       summary: { count: 1, scheduledWeightKg: '48000.000', availableWeightKg: '552000.000' },
     });
     expect(agenda.json().items).toHaveLength(1);
+    const loadId = scheduledLoad.json().id as string;
+    const rescheduleInput = {
+      scheduledLocal: '2026-11-11T09:15', expectedWeightKg: '50000.000',
+      vehiclePlate: 'RBC-7H55', carrierName: 'Rodogrãos', destinationCode: 'ARM-RV01',
+      reason: 'Reagendamento solicitado pela transportadora.',
+    };
+    const outsideWindow = await server.inject({
+      method: 'PUT', url: `/v1/loads/${loadId}/schedule`, headers: identityHeaders,
+      payload: { ...rescheduleInput, scheduledLocal: '2026-12-01T09:15' },
+    });
+    expect(outsideWindow.statusCode).toBe(422);
+    expect(outsideWindow.json()).toMatchObject({ code: 'LOAD_OUTSIDE_CONTRACT_DELIVERY_WINDOW' });
+    const overBalance = await server.inject({
+      method: 'PUT', url: `/v1/loads/${loadId}/schedule`, headers: identityHeaders,
+      payload: { ...rescheduleInput, expectedWeightKg: '600001.000' },
+    });
+    expect(overBalance.statusCode).toBe(422);
+    expect(overBalance.json()).toMatchObject({ code: 'LOAD_EXCEEDS_CONTRACT_BALANCE' });
+    const rescheduled = await server.inject({
+      method: 'PUT', url: `/v1/loads/${loadId}/schedule`, headers: identityHeaders,
+      payload: rescheduleInput,
+    });
+    expect(rescheduled.statusCode, rescheduled.body).toBe(200);
+    expect(rescheduled.json()).toMatchObject({ expectedWeightKg: '50000.000', contractBalanceKg: '550000.000' });
+    const otherTenantCannotEdit = await server.inject({
+      method: 'PUT', url: `/v1/loads/${loadId}/schedule`,
+      headers: { ...identityHeaders, 'x-tenant-id': '99999999-9999-4999-8999-999999999999' },
+      payload: rescheduleInput,
+    });
+    expect(otherTenantCannotEdit.statusCode).toBe(404);
+    const expendable = await server.inject({
+      method: 'POST', url: `/v1/contracts/${contract.contractId}/loads`, headers: identityHeaders,
+      payload: { ...rescheduleInput, expectedWeightKg: '2000.000' },
+    });
+    expect(expendable.statusCode).toBe(201);
+    const cancelledLoad = await server.inject({
+      method: 'POST', url: `/v1/loads/${expendable.json().id}/cancel`, headers: identityHeaders,
+      payload: { reason: 'Veículo indisponível antes da chegada ao armazém.' },
+    });
+    expect(cancelledLoad.statusCode, cancelledLoad.body).toBe(201);
+    expect(cancelledLoad.json()).toMatchObject({ status: 'CANCELLED' });
+    const balanceAfterCancellation = await server.inject({
+      method: 'GET', url: `/v1/contracts/${contract.contractId}/loads`, headers: identityHeaders,
+    });
+    expect(balanceAfterCancellation.json()).toMatchObject({
+      summary: { count: 2, scheduledWeightKg: '50000.000', availableWeightKg: '550000.000' },
+    });
+    const cancelledDetail = await server.inject({
+      method: 'GET', url: `/v1/loads/${expendable.json().id}`, headers: identityHeaders,
+    });
+    expect(cancelledDetail.json().events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'load.cancelled', payload: expect.objectContaining({ releasedWeightKg: '2000.000' }) }),
+    ]));
+    const rescheduledDetail = await server.inject({
+      method: 'GET', url: `/v1/loads/${loadId}`, headers: identityHeaders,
+    });
+    expect(rescheduledDetail.json().events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'load.rescheduled', payload: expect.objectContaining({ reason: rescheduleInput.reason }) }),
+    ]));
+    const noRepeatCancellation = await server.inject({
+      method: 'POST', url: `/v1/loads/${expendable.json().id}/cancel`, headers: identityHeaders,
+      payload: { reason: 'Tentativa duplicada de cancelamento da carga.' },
+    });
+    expect(noRepeatCancellation.statusCode).toBe(409);
     const started = await server.inject({
       method: 'POST', url: `/v1/loads/${scheduledLoad.json().id}/start-receiving`, headers: identityHeaders,
     });
     expect(started.statusCode).toBe(201);
     expect(started.json().status).toBe('IN_RECEIVING');
+    const noRescheduleAfterArrival = await server.inject({
+      method: 'PUT', url: `/v1/loads/${loadId}/schedule`, headers: identityHeaders,
+      payload: rescheduleInput,
+    });
+    expect(noRescheduleAfterArrival.statusCode).toBe(409);
+    const noCancelAfterArrival = await server.inject({
+      method: 'POST', url: `/v1/loads/${loadId}/cancel`, headers: identityHeaders,
+      payload: { reason: 'Não é permitido cancelar após iniciar recebimento.' },
+    });
+    expect(noCancelAfterArrival.statusCode).toBe(409);
     const invalidWeights = await server.inject({
       method: 'PUT', url: `/v1/loads/${scheduledLoad.json().id}/receipt`, headers: identityHeaders,
       payload: {
@@ -257,8 +331,8 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
         counterparty_name: 'Cooperativa Teste do Cerrado',
         status: 'ACTIVE',
         load_count: 1,
-        scheduled_weight_kg: '48000.000',
-        available_weight_kg: '552000.000',
+        scheduled_weight_kg: '50000.000',
+        available_weight_kg: '550000.000',
         pending_obligations: 2,
       }],
     });
@@ -273,7 +347,7 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
       method: 'POST', url: `/v1/contracts/${contract.contractId}/loads`, headers: identityHeaders,
       payload: {
         scheduledLocal: '2026-11-11T08:30',
-        expectedWeightKg: '552000.001',
+        expectedWeightKg: '550000.001',
         vehiclePlate: 'QAB-2J41',
         carrierName: 'Transmil',
         destinationCode: 'ARM-RV01',
@@ -326,7 +400,7 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
 
     const processor = app.get(OutboxProcessor);
     const firstPass = await processor.processTenant(identityHeaders['x-tenant-id']);
-    expect(firstPass).toMatchObject({ claimed: 16, published: 16, failed: 0, recovered: 0, pending: 0 });
+    expect(firstPass).toMatchObject({ claimed: 19, published: 19, failed: 0, recovered: 0, pending: 0 });
     expect(await processor.processTenant(identityHeaders['x-tenant-id'])).toMatchObject({
       claimed: 0, published: 0, failed: 0, recovered: 0, pending: 0,
     });
@@ -349,7 +423,7 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
         WHERE tenant_id=$1 AND aggregate_id=$2 AND event_type='offer.cancelled'`,
       [identityHeaders['x-tenant-id'], cancellableOffer.offerId],
     );
-    expect(activity.rows[0]?.count).toBe('16');
+    expect(activity.rows[0]?.count).toBe('19');
     expect(projection.rows[0]?.projected_margin_per_sc).toBe('3.000000');
     expect(projection.rows[0]?.obligations).toHaveLength(2);
     expect(cancellationAudit.rows[0]?.payload).toEqual({
