@@ -182,6 +182,15 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
       responsible_name: 'Equipe de contratos', status: 'PENDING',
     });
     const obligationId = createdObligation.json().id as string;
+    const openObligations = await server.inject({
+      method: 'GET', url: '/v1/contracts/obligations/open', headers: identityHeaders,
+    });
+    expect(openObligations.statusCode, openObligations.body).toBe(200);
+    expect(openObligations.json().hasMore).toBe(false);
+    expect(openObligations.json().items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: obligationId, contract_id: contract.contractId,
+        due_date: '2026-11-05', title: 'Conferir garantia contratual', status: 'PENDING' }),
+    ]));
     const obligationInput = {
       title: 'Conferir garantia contratual',
       description: 'Validar o documento anexado antes da primeira entrega.',
@@ -207,6 +216,12 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     });
     expect(cancelledObligation.statusCode, cancelledObligation.body).toBe(200);
     expect(cancelledObligation.json()).toMatchObject({ status: 'CANCELLED', completed_at: null });
+    const queueAfterCancel = await server.inject({
+      method: 'GET', url: '/v1/contracts/obligations/open', headers: identityHeaders,
+    });
+    expect(queueAfterCancel.json().items).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: obligationId }),
+    ]));
     const isolatedObligationUpdate = await server.inject({
       method: 'PUT', url: `/v1/contracts/${contract.contractId}/obligations/${obligationId}`,
       headers: { ...identityHeaders, 'x-tenant-id': '99999999-9999-4999-8999-999999999999' },

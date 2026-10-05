@@ -427,6 +427,29 @@ export class CommercialService {
     });
   }
 
+  async listOpenContractObligations(tenantId: string, actorId: string) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertMember(client, tenantId, actorId);
+      const result = await client.query(
+        `SELECT ob.id,ob.contract_id,ob.code,
+                COALESCE(ob.title, CASE ob.code
+                  WHEN 'SIGNED_CONTRACT' THEN 'Contrato assinado'
+                  WHEN 'DELIVERY_SCHEDULE' THEN 'Agenda de entrega'
+                  ELSE ob.code END) AS title,
+                ob.description,ob.due_date::text,ob.responsible_name,ob.status,
+                cp.legal_name AS counterparty_name,o.commodity
+           FROM app.contract_obligations ob
+           JOIN app.contracts c ON (c.tenant_id,c.id)=(ob.tenant_id,ob.contract_id)
+           JOIN app.offers o ON (o.tenant_id,o.id)=(c.tenant_id,c.offer_id)
+           JOIN app.counterparties cp ON (cp.tenant_id,cp.id)=(o.tenant_id,o.counterparty_id)
+          WHERE ob.tenant_id=$1 AND c.status='ACTIVE'
+            AND ob.status IN ('PENDING','IN_PROGRESS')
+          ORDER BY ob.due_date NULLS LAST,ob.created_at,ob.id
+          LIMIT 101`, [tenantId]);
+      return { items: result.rows.slice(0, 100), hasMore: result.rows.length > 100 };
+    });
+  }
+
   async createContractObligation(tenantId: string, actorId: string, contractId: string,
     input: CreateContractObligationInput) {
     return this.db.transaction(tenantId, async (client) => {

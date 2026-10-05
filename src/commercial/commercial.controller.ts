@@ -91,6 +91,11 @@ export class CommercialController {
     return this.service.listContracts(identity.tenantId, identity.actorId);
   }
 
+  @Get('contracts/obligations/open')
+  openObligations(@Identity() identity: RequestIdentity) {
+    return this.service.listOpenContractObligations(identity.tenantId, identity.actorId);
+  }
+
   @Get('contracts/:contractId/summary')
   summary(@Identity() identity: RequestIdentity,
     @Param('contractId', ParseUUIDPipe) contractId: string) {
