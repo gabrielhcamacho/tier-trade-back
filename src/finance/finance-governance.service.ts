@@ -5,6 +5,7 @@ import type { PoolClient } from 'pg';
 import { DatabasePlatformPort } from '../database/database.js';
 import type {
   ConfigureFinancePolicyInput, CreateBankAccountInput, CreateBankStatementEntryInput,
+  AccrueCommissionInput, CreateCommissionPolicyInput,
   CreatePaymentBatchInput, CreatePurchaseCostComponentInput, ReconcileBankStatementEntryInput,
   ReverseSettlementInput,
 } from './finance.schemas.js';
@@ -43,6 +44,15 @@ export class FinanceGovernanceService {
           JOIN app.bank_accounts ba ON (ba.tenant_id,ba.id)=(bse.tenant_id,bse.bank_account_id)
           WHERE bse.tenant_id=$1 ORDER BY bse.occurred_at DESC,bse.id DESC`, [tenantId]);
       const realized = await this.realizedMargin(client, tenantId);
+      const commissionPolicies = await client.query(`SELECT id,code,name,version,status,basis,rate_pct::text,
+          commodity,beneficiary_name,effective_from::text,effective_to::text,created_at
+          FROM app.commission_policies WHERE tenant_id=$1 ORDER BY code,version DESC`, [tenantId]);
+      const commissionAccruals = await client.query(`SELECT ca.id,ca.policy_id,cp.code AS policy_code,
+          ca.financial_event_id,ca.basis_amount::text,ca.commission_amount::text,ca.status,
+          ca.calculation_snapshot,ca.created_at
+          FROM app.commission_accruals ca JOIN app.commission_policies cp
+            ON (cp.tenant_id,cp.id)=(ca.tenant_id,ca.policy_id)
+          WHERE ca.tenant_id=$1 ORDER BY ca.created_at DESC,ca.id DESC`, [tenantId]);
       return {
         activePolicy: policies.rows.find((row) => row.active) ?? null,
         policies: policies.rows,
@@ -51,6 +61,8 @@ export class FinanceGovernanceService {
         bankAccounts: accounts.rows,
         bankStatementEntries: entries.rows,
         realizedMargin: realized,
+        commissionPolicies: commissionPolicies.rows,
+        commissionAccruals: commissionAccruals.rows,
       };
     });
   }
@@ -86,6 +98,91 @@ export class FinanceGovernanceService {
       await this.record(client, tenantId, actorId, 'finance.purchase_cost_component_created',
         'purchase_cost_component', id, input);
       return { id, ...input, amount: new Decimal(input.amount).toFixed(2) };
+    });
+  }
+
+  createCommissionPolicy(tenantId: string, actorId: string, input: CreateCommissionPolicyInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId,
+        input.status === 'ACTIVE' ? 'FINANCE_APPROVE' : 'FINANCE_EDIT');
+      const versions = await client.query<{ version: number }>(
+        `SELECT version FROM app.commission_policies WHERE tenant_id=$1 AND code=$2 FOR UPDATE`,
+        [tenantId, input.code]);
+      const version = Math.max(0, ...versions.rows.map((row) => row.version)) + 1;
+      if (input.status === 'ACTIVE') {
+        await client.query(`UPDATE app.commission_policies SET status='RETIRED'
+          WHERE tenant_id=$1 AND code=$2 AND status='ACTIVE'`, [tenantId, input.code]);
+      }
+      const id = randomUUID();
+      await client.query(`INSERT INTO app.commission_policies
+        (tenant_id,id,code,name,version,status,basis,rate_pct,commodity,beneficiary_name,
+         effective_from,effective_to,created_by)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+      [tenantId, id, input.code, input.name, version, input.status, input.basis,
+        new Decimal(input.ratePct).toFixed(6), input.commodity, input.beneficiaryName,
+        input.effectiveFrom, input.effectiveTo, actorId]);
+      await this.record(client, tenantId, actorId, 'finance.commission_policy_created',
+        'commission_policy', id, { ...input, version });
+      return { id, version, ...input, ratePct: new Decimal(input.ratePct).toFixed(6) };
+    });
+  }
+
+  accrueCommission(tenantId: string, actorId: string, input: AccrueCommissionInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'FINANCE_EDIT');
+      const source = await client.query<{
+        status: string; basis: string; rate_pct: string; effective_from: string;
+        effective_to: string | null; expected_on: string | null; amount: string; commodity: string | null;
+        policy_commodity: string | null;
+      }>(`SELECT cp.status,cp.basis,cp.rate_pct::text,cp.effective_from::text,cp.effective_to::text,
+                 fe.expected_on::text,COALESCE(fe.calculated_amount,fe.raw_amount)::text AS amount,
+                 COALESCE(sc.commodity,o.commodity) AS commodity,cp.commodity AS policy_commodity
+            FROM app.commission_policies cp
+            JOIN app.financial_events fe ON fe.tenant_id=cp.tenant_id AND fe.id=$3
+            LEFT JOIN app.sales_contracts sc
+              ON (sc.tenant_id,sc.id)=(fe.tenant_id,fe.sales_contract_id)
+            LEFT JOIN app.contracts c ON (c.tenant_id,c.id)=(fe.tenant_id,fe.purchase_contract_id)
+            LEFT JOIN app.offers o ON (o.tenant_id,o.id)=(c.tenant_id,c.offer_id)
+           WHERE cp.tenant_id=$1 AND cp.id=$2 AND fe.calculation_status='READY'
+           FOR UPDATE OF cp,fe`, [tenantId, input.policyId, input.financialEventId]);
+      if (!source.rows[0]) throw new NotFoundException({ code: 'COMMISSION_SOURCE_NOT_FOUND' });
+      const row = source.rows[0];
+      if (row.status !== 'ACTIVE') throw new ConflictException({ code: 'COMMISSION_POLICY_NOT_ACTIVE' });
+      if (row.policy_commodity && row.policy_commodity !== row.commodity) {
+        throw new ConflictException({ code: 'COMMISSION_POLICY_COMMODITY_MISMATCH' });
+      }
+      if (!row.expected_on || row.expected_on < row.effective_from
+        || (row.effective_to && row.expected_on > row.effective_to)) {
+        throw new ConflictException({ code: 'COMMISSION_POLICY_OUTSIDE_EFFECTIVE_PERIOD' });
+      }
+      const basisAmount = new Decimal(row.amount);
+      const exact = basisAmount.mul(row.rate_pct).div(100);
+      if (exact.decimalPlaces() > 2) {
+        throw new UnprocessableEntityException({
+          code: 'COMMISSION_ROUNDING_POLICY_REQUIRED', exactAmount: exact.toString(),
+        });
+      }
+      const commissionAmount = exact.toFixed(2);
+      const id = randomUUID();
+      const snapshot = { basis: row.basis, basisAmount: basisAmount.toFixed(2),
+        ratePct: new Decimal(row.rate_pct).toFixed(6), exactAmount: exact.toString(), rounding: 'NONE_REQUIRED' };
+      try {
+        await client.query(`INSERT INTO app.commission_accruals
+          (tenant_id,id,policy_id,financial_event_id,basis_amount,commission_amount,
+           calculation_snapshot,created_by)
+          VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8)`,
+        [tenantId, id, input.policyId, input.financialEventId, basisAmount.toFixed(2),
+          commissionAmount, JSON.stringify(snapshot), actorId]);
+      } catch (error) {
+        if (typeof error === 'object' && error && 'code' in error && error.code === '23505') {
+          throw new ConflictException({ code: 'COMMISSION_ALREADY_ACCRUED' });
+        }
+        throw error;
+      }
+      await this.record(client, tenantId, actorId, 'finance.commission_accrued',
+        'commission_accrual', id, snapshot);
+      return { id, ...input, basisAmount: basisAmount.toFixed(2), commissionAmount,
+        status: 'ACCRUED', calculationSnapshot: snapshot };
     });
   }
 

@@ -57,6 +57,9 @@ interface ReceiptRow {
   moisture_pct: string;
   impurity_pct: string;
   damaged_pct: string;
+  broken_pct: string;
+  burnt_pct: string;
+  heat_damaged_pct: string;
   quality_decision: string;
   notes: string | null;
   created_at: Date;
@@ -103,6 +106,9 @@ interface ReceiptReportRow {
   moisture_pct: string;
   impurity_pct: string;
   damaged_pct: string;
+  broken_pct: string;
+  burnt_pct: string;
+  heat_damaged_pct: string;
   created_at: Date;
 }
 
@@ -120,6 +126,9 @@ interface OperationalBoardRow extends LoadRow {
   moisture_pct: string | null;
   impurity_pct: string | null;
   damaged_pct: string | null;
+  broken_pct: string | null;
+  burnt_pct: string | null;
+  heat_damaged_pct: string | null;
   quality_decision: string | null;
   open_occurrences: number;
 }
@@ -496,7 +505,7 @@ export class OperationsService {
                 inbound_invoice_number,inbound_invoice_series,inbound_invoice_access_key,
                 document_weight_kg,considered_weight_kg,accepted_weight_kg,weight_decision_reason,
                 weighing_mode,scale_ticket_number,contingency_reason,moisture_pct,
-                impurity_pct,damaged_pct,quality_decision,notes,created_at
+                impurity_pct,damaged_pct,broken_pct,burnt_pct,heat_damaged_pct,quality_decision,notes,created_at
            FROM app.load_receipts
           WHERE tenant_id=$1 AND load_id=$2
           ORDER BY version DESC`,
@@ -521,7 +530,7 @@ export class OperationsService {
         `SELECT id,receipt_id,reference,version,is_current,issued_at,inbound_invoice_number,
                 inbound_invoice_series,inbound_invoice_access_key,document_weight_kg,
                 arrival_weight_kg,considered_weight_kg,accepted_weight_kg,scale_ticket_number,
-                moisture_pct,impurity_pct,damaged_pct,created_at
+                moisture_pct,impurity_pct,damaged_pct,broken_pct,burnt_pct,heat_damaged_pct,created_at
            FROM app.load_receipt_reports
           WHERE tenant_id=$1 AND load_id=$2
           ORDER BY version DESC`,
@@ -571,7 +580,8 @@ export class OperationsService {
               r.inbound_invoice_number,r.document_weight_kg,
               (r.gross_weight_kg-r.tare_weight_kg)::text AS arrival_weight_kg,
               r.considered_weight_kg,r.accepted_weight_kg,r.scale_ticket_number,
-              r.moisture_pct,r.impurity_pct,r.damaged_pct,r.quality_decision,
+              r.moisture_pct,r.impurity_pct,r.damaged_pct,r.broken_pct,r.burnt_pct,
+              r.heat_damaged_pct,r.quality_decision,
               count(o.id) FILTER (WHERE o.status='OPEN')::int AS open_occurrences
          FROM app.loads l
          JOIN app.tenants t ON t.id=l.tenant_id
@@ -584,6 +594,7 @@ export class OperationsService {
                  r.inbound_invoice_number,r.document_weight_kg,r.gross_weight_kg,
                  r.tare_weight_kg,r.considered_weight_kg,r.accepted_weight_kg,
                  r.scale_ticket_number,r.moisture_pct,r.impurity_pct,r.damaged_pct,
+                 r.broken_pct,r.burnt_pct,r.heat_damaged_pct,
                  r.quality_decision
         ORDER BY CASE l.status WHEN 'IN_RECEIVING' THEN 0 WHEN 'SCHEDULED' THEN 1 ELSE 2 END,
                  l.scheduled_at,l.id`,
@@ -605,6 +616,9 @@ export class OperationsService {
         moisturePct: row.moisture_pct,
         impurityPct: row.impurity_pct,
         damagedPct: row.damaged_pct,
+        brokenPct: row.broken_pct,
+        burntPct: row.burnt_pct,
+        heatDamagedPct: row.heat_damaged_pct,
         qualityDecision: row.quality_decision,
       } : null,
     }));
@@ -678,7 +692,7 @@ export class OperationsService {
                 inbound_invoice_number,inbound_invoice_series,inbound_invoice_access_key,
                 document_weight_kg,considered_weight_kg,accepted_weight_kg,weight_decision_reason,
                 weighing_mode,scale_ticket_number,contingency_reason,moisture_pct,
-                impurity_pct,damaged_pct,quality_decision,notes,created_at
+                impurity_pct,damaged_pct,broken_pct,burnt_pct,heat_damaged_pct,quality_decision,notes,created_at
            FROM app.load_receipts
           WHERE tenant_id=$1 AND load_id=$2 AND is_current=true
           FOR UPDATE`,
@@ -699,21 +713,21 @@ export class OperationsService {
            inbound_invoice_access_key,document_weight_kg,gross_weight_kg,tare_weight_kg,
            considered_weight_kg,accepted_weight_kg,weight_decision_reason,weighing_mode,
            scale_ticket_number,contingency_reason,moisture_pct,impurity_pct,damaged_pct,
-           quality_decision,notes,created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+           broken_pct,burnt_pct,heat_damaged_pct,quality_decision,notes,created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
          RETURNING id,version,received_at,gross_weight_kg,tare_weight_kg,net_weight_kg,
                    inbound_invoice_number,inbound_invoice_series,inbound_invoice_access_key,
                    document_weight_kg,considered_weight_kg,accepted_weight_kg,weight_decision_reason,
                    weighing_mode,scale_ticket_number,contingency_reason,moisture_pct,
-                   impurity_pct,damaged_pct,quality_decision,notes,created_at`,
+                   impurity_pct,damaged_pct,broken_pct,burnt_pct,heat_damaged_pct,quality_decision,notes,created_at`,
         [tenantId, receiptId, loadId, version, input.receivedAt, input.inboundInvoiceNumber,
           input.inboundInvoiceSeries, input.inboundInvoiceAccessKey, input.documentWeightKg,
           input.grossWeightKg, input.tareWeightKg, input.consideredWeightKg,
           input.acceptedWeightKg, weightsDiffer ? input.weightDecisionReason : null,
           input.weighingMode, input.scaleTicketNumber,
           input.weighingMode === 'MANUAL_CONTINGENCY' ? input.contingencyReason : null,
-          input.moisturePct, input.impurityPct, input.damagedPct, input.qualityDecision,
-          input.notes, actorId],
+          input.moisturePct, input.impurityPct, input.damagedPct, input.brokenPct,
+          input.burntPct, input.heatDamagedPct, input.qualityDecision, input.notes, actorId],
       );
       const nextStatus = input.qualityDecision === 'ACCEPTED' ? 'RECEIVED' : 'IN_RECEIVING';
       await client.query(
@@ -869,7 +883,7 @@ export class OperationsService {
                 inbound_invoice_number,inbound_invoice_series,inbound_invoice_access_key,
                 document_weight_kg,considered_weight_kg,accepted_weight_kg,weight_decision_reason,
                 weighing_mode,scale_ticket_number,contingency_reason,moisture_pct,
-                impurity_pct,damaged_pct,quality_decision,notes,created_at
+                impurity_pct,damaged_pct,broken_pct,burnt_pct,heat_damaged_pct,quality_decision,notes,created_at
            FROM app.load_receipts
           WHERE tenant_id=$1 AND load_id=$2 AND is_current=true FOR UPDATE`,
         [tenantId, loadId],
@@ -887,7 +901,7 @@ export class OperationsService {
         `SELECT id,receipt_id,reference,version,is_current,issued_at,inbound_invoice_number,
                 inbound_invoice_series,inbound_invoice_access_key,document_weight_kg,
                 arrival_weight_kg,considered_weight_kg,accepted_weight_kg,scale_ticket_number,
-                moisture_pct,impurity_pct,damaged_pct,created_at
+                moisture_pct,impurity_pct,damaged_pct,broken_pct,burnt_pct,heat_damaged_pct,created_at
            FROM app.load_receipt_reports
           WHERE tenant_id=$1 AND load_id=$2 AND is_current=true FOR UPDATE`,
         [tenantId, loadId],
@@ -913,18 +927,19 @@ export class OperationsService {
           (tenant_id,id,load_id,receipt_id,reference,version,issued_at,inbound_invoice_number,
            inbound_invoice_series,inbound_invoice_access_key,document_weight_kg,arrival_weight_kg,
            considered_weight_kg,accepted_weight_kg,scale_ticket_number,moisture_pct,impurity_pct,
-           damaged_pct,created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,now(),$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+           damaged_pct,broken_pct,burnt_pct,heat_damaged_pct,created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,now(),$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
          RETURNING id,receipt_id,reference,version,is_current,issued_at,inbound_invoice_number,
                    inbound_invoice_series,inbound_invoice_access_key,document_weight_kg,
                    arrival_weight_kg,considered_weight_kg,accepted_weight_kg,scale_ticket_number,
-                   moisture_pct,impurity_pct,damaged_pct,created_at`,
+                   moisture_pct,impurity_pct,damaged_pct,broken_pct,burnt_pct,heat_damaged_pct,created_at`,
         [tenantId, reportId, loadId, currentReceipt.id, reference, version,
           currentReceipt.inbound_invoice_number, currentReceipt.inbound_invoice_series,
           currentReceipt.inbound_invoice_access_key, currentReceipt.document_weight_kg,
           currentReceipt.net_weight_kg, currentReceipt.considered_weight_kg,
           currentReceipt.accepted_weight_kg, currentReceipt.scale_ticket_number,
-          currentReceipt.moisture_pct, currentReceipt.impurity_pct, currentReceipt.damaged_pct, actorId],
+          currentReceipt.moisture_pct, currentReceipt.impurity_pct, currentReceipt.damaged_pct,
+          currentReceipt.broken_pct, currentReceipt.burnt_pct, currentReceipt.heat_damaged_pct, actorId],
       );
       const eventType = previous.rows[0] ? 'load.romaneio_corrected' : 'load.romaneio_issued';
       await this.record(client, tenantId, actorId, eventType, loadId, {
@@ -989,6 +1004,9 @@ export class OperationsService {
       moisturePct: row.moisture_pct,
       impurityPct: row.impurity_pct,
       damagedPct: row.damaged_pct,
+      brokenPct: row.broken_pct,
+      burntPct: row.burnt_pct,
+      heatDamagedPct: row.heat_damaged_pct,
       qualityDecision: row.quality_decision,
       notes: row.notes,
       createdAt: row.created_at.toISOString(),
@@ -1041,6 +1059,9 @@ export class OperationsService {
       moisturePct: row.moisture_pct,
       impurityPct: row.impurity_pct,
       damagedPct: row.damaged_pct,
+      brokenPct: row.broken_pct,
+      burntPct: row.burnt_pct,
+      heatDamagedPct: row.heat_damaged_pct,
       createdAt: row.created_at.toISOString(),
     };
   }

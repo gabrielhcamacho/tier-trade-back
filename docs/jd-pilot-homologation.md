@@ -8,7 +8,7 @@ Validar ponta a ponta o primeiro piloto da JD para compras e vendas de soja e mi
 
 - oferta de milho e soja com cálculo determinístico e política de margem versionada;
 - aprovação comercial e ativação do contrato de compra;
-- agendamento, pátio, pesagens, qualidade, ocorrência e romaneio versionado;
+- agendamento, pátio, pesagens, qualidade ampliada (umidade, impureza, avariados, quebrados, queimados e ardidos), ocorrência e romaneio versionado;
 - entrada de estoque pelo recebimento aceito;
 - NF-e de compra conferida contra peso e preço, título a pagar e estorno sem apagar histórico;
 - composição configurável da compra: desconto de qualidade, frete, armazenagem, retenção e outros componentes;
@@ -18,6 +18,9 @@ Validar ponta a ponta o primeiro piloto da JD para compras e vendas de soja e mi
 - política financeira versionada, lote de pagamento, alçada e segregação de função;
 - importação de extrato e conciliação exata de crédito/recebimento ou débito/pagamento;
 - isolamento por tenant, RLS, auditoria e eventos de saída.
+- titularidade, risco, custódia, remaneios, perdas e inventários físicos em livro auditável;
+- comissão por política versionada e valor-base financeiro persistido, sem arredondamento silencioso;
+- metadados de documentos, versões, assinaturas e URLs temporárias em bucket privado do Supabase de produção.
 
 ### Evidência executável disponível
 
@@ -40,7 +43,7 @@ Os valores usados nessas provas são dados demonstrativos explícitos. A execuç
 ## Pendências externas para homologação final
 
 1. Receber o contrato em que a JD figura como compradora e mapear campos e obrigações sem inferência.
-2. Receber as tabelas homologadas de qualidade, tolerâncias e descontos da JD.
+2. Homologar com a JD os limites, tolerâncias, contraprova e descontos por commodity. A planilha recebida já cobre os campos e exemplos operacionais, mas contém percentuais variáveis e entradas manuais que não podem ser promovidos automaticamente a regra.
 3. Receber a matriz fiscal aplicável à JD/MT, com CFOPs, tratamentos, alíquotas, fundos e responsabilidades.
 4. Receber bancos, formatos de extrato e matriz nominal de aprovadores/alçadas.
 5. Executar os quatro cenários acima com os diretores da JD e registrar aceite, ressalvas e evidências.

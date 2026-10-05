@@ -200,6 +200,7 @@ export async function resetDemoTenant(
 async function clearOperationalData(client: PoolClient, tenantId: string, actorId: string): Promise<void> {
   await client.query('SELECT app.delete_demo_risk($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_fiscal($1,$2)', [tenantId, actorId]);
+  await client.query('SELECT app.delete_demo_operational_completeness($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_finance($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_fiscal_configuration($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_sales_fulfillment($1,$2)', [tenantId, actorId]);

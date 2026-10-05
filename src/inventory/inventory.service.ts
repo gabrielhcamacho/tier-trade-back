@@ -5,7 +5,10 @@ import type { PoolClient } from 'pg';
 import { DatabasePlatformPort } from '../database/database.js';
 import { FinancialProjectionPort } from '../finance/finance.port.js';
 import { InventoryReceiptPort, type ApplyReceiptToInventoryInput } from './inventory.port.js';
-import type { AllocationInput, DispatchInput, SalesContractInput } from './inventory.schemas.js';
+import type {
+  AllocationInput, CompleteTransferInput, DispatchInput, InventoryCountInput,
+  InventoryLocationInput, LossInput, LotClassificationInput, SalesContractInput, StartTransferInput,
+} from './inventory.schemas.js';
 
 interface LotPositionRow {
   id: string;
@@ -19,6 +22,10 @@ interface LotPositionRow {
   ownership_status: string;
   risk_status: string;
   custody_status: string;
+  owner_counterparty_id: string | null;
+  owner_counterparty_name: string | null;
+  custodian_counterparty_id: string | null;
+  custodian_counterparty_name: string | null;
   quantity_kg: string;
   committed_kg: string;
   available_kg: string;
@@ -67,6 +74,8 @@ export class InventoryService extends InventoryReceiptPort {
         `SELECT lot.id,lot.lot_code,lot.source_load_id,lot.contract_id,
                 loc.code AS location_code,loc.name AS location_name,lot.commodity,lot.status,
                 lot.ownership_status,lot.risk_status,lot.custody_status,
+                lot.owner_counterparty_id,owner.legal_name AS owner_counterparty_name,
+                lot.custodian_counterparty_id,custodian.legal_name AS custodian_counterparty_name,
                 COALESCE(sum(m.quantity_delta_kg),0)::text AS quantity_kg,
                 COALESCE(allocation_totals.committed_kg,0)::text AS committed_kg,
                 GREATEST(COALESCE(sum(m.quantity_delta_kg),0)-COALESCE(allocation_totals.committed_kg,0),0)::text AS available_kg,
@@ -76,6 +85,10 @@ export class InventoryService extends InventoryReceiptPort {
            JOIN app.inventory_locations loc
              ON (loc.tenant_id,loc.id)=(lot.tenant_id,lot.location_id)
            JOIN app.loads l ON (l.tenant_id,l.id)=(lot.tenant_id,lot.source_load_id)
+           LEFT JOIN app.counterparties owner
+             ON (owner.tenant_id,owner.id)=(lot.tenant_id,lot.owner_counterparty_id)
+           LEFT JOIN app.counterparties custodian
+             ON (custodian.tenant_id,custodian.id)=(lot.tenant_id,lot.custodian_counterparty_id)
            LEFT JOIN app.inventory_movements m
              ON (m.tenant_id,m.lot_id)=(lot.tenant_id,lot.id)
            LEFT JOIN app.load_receipts r
@@ -93,7 +106,9 @@ export class InventoryService extends InventoryReceiptPort {
           WHERE lot.tenant_id=$1
           GROUP BY lot.id,lot.lot_code,lot.source_load_id,lot.contract_id,loc.code,loc.name,
                    lot.commodity,lot.status,lot.ownership_status,lot.risk_status,
-                   lot.custody_status,r.moisture_pct,r.impurity_pct,r.damaged_pct,
+                   lot.custody_status,lot.owner_counterparty_id,owner.legal_name,
+                   lot.custodian_counterparty_id,custodian.legal_name,
+                   r.moisture_pct,r.impurity_pct,r.damaged_pct,
                    l.vehicle_plate,lot.created_at,allocation_totals.committed_kg
           ORDER BY loc.code,lot.lot_code`,
         [tenantId],
@@ -162,6 +177,28 @@ export class InventoryService extends InventoryReceiptPort {
           WHERE d.tenant_id=$1 ORDER BY d.created_at DESC,d.id DESC`, [tenantId]);
       const counterparties = await client.query(
         `SELECT id,legal_name FROM app.counterparties WHERE tenant_id=$1 ORDER BY legal_name,id`, [tenantId]);
+      const locations = await client.query(
+        `SELECT id,code,name,status FROM app.inventory_locations WHERE tenant_id=$1 ORDER BY code,id`, [tenantId]);
+      const transfers = await client.query(
+        `SELECT tr.id,tr.lot_id,lot.lot_code,tr.source_location_id,src.code AS source_location_code,
+                tr.destination_location_id,dst.code AS destination_location_code,tr.status,
+                tr.started_at,tr.completed_at,tr.cancelled_at,tr.reason,tr.created_at
+           FROM app.inventory_transfers tr
+           JOIN app.inventory_lots lot ON (lot.tenant_id,lot.id)=(tr.tenant_id,tr.lot_id)
+           JOIN app.inventory_locations src ON (src.tenant_id,src.id)=(tr.tenant_id,tr.source_location_id)
+           JOIN app.inventory_locations dst ON (dst.tenant_id,dst.id)=(tr.tenant_id,tr.destination_location_id)
+          WHERE tr.tenant_id=$1 ORDER BY tr.created_at DESC,tr.id DESC`, [tenantId]);
+      const lotEvents = await client.query(
+        `SELECT e.id,e.lot_id,lot.lot_code,e.event_type,e.payload,e.reason,e.occurred_at,e.created_at
+           FROM app.inventory_lot_events e
+           JOIN app.inventory_lots lot ON (lot.tenant_id,lot.id)=(e.tenant_id,e.lot_id)
+          WHERE e.tenant_id=$1 ORDER BY e.occurred_at DESC,e.id DESC`, [tenantId]);
+      const counts = await client.query(
+        `SELECT c.id,c.lot_id,lot.lot_code,c.system_quantity_kg::text,c.counted_quantity_kg::text,
+                c.difference_kg::text,c.occurred_at,c.reason,c.created_at
+           FROM app.inventory_counts c
+           JOIN app.inventory_lots lot ON (lot.tenant_id,lot.id)=(c.tenant_id,c.lot_id)
+          WHERE c.tenant_id=$1 ORDER BY c.occurred_at DESC,c.id DESC`, [tenantId]);
       return {
         tenant: {
           legalName: tenant.rows[0]!.legal_name,
@@ -189,6 +226,12 @@ export class InventoryService extends InventoryReceiptPort {
           ownershipStatus: row.ownership_status,
           riskStatus: row.risk_status,
           custodyStatus: row.custody_status,
+          owner: row.owner_counterparty_id ? {
+            id: row.owner_counterparty_id, name: row.owner_counterparty_name,
+          } : null,
+          custodian: row.custodian_counterparty_id ? {
+            id: row.custodian_counterparty_id, name: row.custodian_counterparty_name,
+          } : null,
           quantityKg: row.quantity_kg,
           committedKg: row.committed_kg,
           availableKg: row.status === 'AVAILABLE' ? row.available_kg : '0.000',
@@ -217,6 +260,10 @@ export class InventoryService extends InventoryReceiptPort {
         allocations: allocations.rows,
         dispatches: dispatches.rows,
         counterparties: counterparties.rows,
+        locations: locations.rows,
+        transfers: transfers.rows,
+        lotEvents: lotEvents.rows,
+        counts: counts.rows,
       };
     });
   }
@@ -462,6 +509,180 @@ export class InventoryService extends InventoryReceiptPort {
     });
   }
 
+  createLocation(tenantId: string, actorId: string, input: InventoryLocationInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'OPERATIONS_EDIT');
+      const id = randomUUID();
+      try {
+        await client.query(
+          `INSERT INTO app.inventory_locations (tenant_id,id,code,name,created_by)
+           VALUES ($1,$2,$3,$4,$5)`, [tenantId, id, input.code, input.name, actorId]);
+      } catch (error) {
+        if (isUniqueViolation(error)) throw new ConflictException({ code: 'INVENTORY_LOCATION_CODE_EXISTS' });
+        throw error;
+      }
+      await this.record(client, tenantId, actorId, 'inventory.location_created', 'inventory_location', id, input);
+      return { id, status: 'ACTIVE', ...input };
+    });
+  }
+
+  classifyLot(tenantId: string, actorId: string, lotId: string, input: LotClassificationInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'OPERATIONS_EDIT');
+      const lot = await client.query(
+        `SELECT ownership_status,risk_status,custody_status,owner_counterparty_id,custodian_counterparty_id
+           FROM app.inventory_lots WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenantId, lotId]);
+      if (!lot.rows[0]) throw new NotFoundException({ code: 'INVENTORY_LOT_NOT_FOUND' });
+      for (const counterpartyId of [input.ownerCounterpartyId, input.custodianCounterpartyId].filter(Boolean)) {
+        const exists = await client.query(
+          `SELECT 1 FROM app.counterparties WHERE tenant_id=$1 AND id=$2`, [tenantId, counterpartyId]);
+        if (!exists.rows[0]) throw new NotFoundException({ code: 'COUNTERPARTY_NOT_FOUND' });
+      }
+      if (input.custodyStatus === 'IN_TRANSIT') {
+        const activeTransfer = await client.query(
+          `SELECT 1 FROM app.inventory_transfers WHERE tenant_id=$1 AND lot_id=$2 AND status='IN_TRANSIT'`,
+          [tenantId, lotId]);
+        if (!activeTransfer.rows[0]) throw new ConflictException({ code: 'CUSTODY_TRANSIT_REQUIRES_ACTIVE_TRANSFER' });
+      }
+      await client.query(
+        `UPDATE app.inventory_lots SET ownership_status=$3,risk_status=$4,custody_status=$5,
+                owner_counterparty_id=$6,custodian_counterparty_id=$7,updated_at=now()
+          WHERE tenant_id=$1 AND id=$2`,
+        [tenantId, lotId, input.ownershipStatus, input.riskStatus, input.custodyStatus,
+          input.ownerCounterpartyId, input.custodianCounterpartyId]);
+      await this.recordLotEvent(client, tenantId, actorId, lotId, 'CLASSIFICATION_CHANGED', input, input.reason,
+        new Date(input.occurredAt));
+      await this.record(client, tenantId, actorId, 'inventory.lot_classified', 'inventory_lot', lotId, input);
+      return { id: lotId, ...input };
+    });
+  }
+
+  startTransfer(tenantId: string, actorId: string, lotId: string, input: StartTransferInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'OPERATIONS_EDIT');
+      const lot = await client.query<{ location_id: string; custody_status: string }>(
+        `SELECT location_id,custody_status FROM app.inventory_lots
+          WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenantId, lotId]);
+      if (!lot.rows[0]) throw new NotFoundException({ code: 'INVENTORY_LOT_NOT_FOUND' });
+      if (lot.rows[0].custody_status !== 'IN_STORAGE') {
+        throw new ConflictException({ code: 'INVENTORY_LOT_NOT_IN_STORAGE' });
+      }
+      if (lot.rows[0].location_id === input.destinationLocationId) {
+        throw new UnprocessableEntityException({ code: 'TRANSFER_DESTINATION_EQUALS_SOURCE' });
+      }
+      const destination = await client.query(
+        `SELECT 1 FROM app.inventory_locations WHERE tenant_id=$1 AND id=$2 AND status='ACTIVE'`,
+        [tenantId, input.destinationLocationId]);
+      if (!destination.rows[0]) throw new NotFoundException({ code: 'INVENTORY_DESTINATION_NOT_FOUND' });
+      const id = randomUUID();
+      await client.query(
+        `INSERT INTO app.inventory_transfers
+          (tenant_id,id,lot_id,source_location_id,destination_location_id,started_at,reason,created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [tenantId, id, lotId, lot.rows[0].location_id, input.destinationLocationId,
+          input.startedAt, input.reason, actorId]);
+      await client.query(`UPDATE app.inventory_lots SET custody_status='IN_TRANSIT',updated_at=now()
+        WHERE tenant_id=$1 AND id=$2`, [tenantId, lotId]);
+      await this.recordLotEvent(client, tenantId, actorId, lotId, 'TRANSFER_STARTED', {
+        transferId: id, sourceLocationId: lot.rows[0].location_id,
+        destinationLocationId: input.destinationLocationId,
+      }, input.reason, new Date(input.startedAt));
+      await this.record(client, tenantId, actorId, 'inventory.transfer_started', 'inventory_transfer', id, input);
+      return { id, lotId, sourceLocationId: lot.rows[0].location_id,
+        destinationLocationId: input.destinationLocationId, status: 'IN_TRANSIT', startedAt: input.startedAt };
+    });
+  }
+
+  completeTransfer(tenantId: string, actorId: string, transferId: string, input: CompleteTransferInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'OPERATIONS_EDIT');
+      const transfer = await client.query<{
+        lot_id: string; destination_location_id: string; status: string; started_at: Date;
+      }>(`SELECT lot_id,destination_location_id,status,started_at FROM app.inventory_transfers
+           WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenantId, transferId]);
+      if (!transfer.rows[0]) throw new NotFoundException({ code: 'INVENTORY_TRANSFER_NOT_FOUND' });
+      if (transfer.rows[0].status !== 'IN_TRANSIT') {
+        throw new ConflictException({ code: 'INVENTORY_TRANSFER_NOT_ACTIVE' });
+      }
+      if (new Date(input.completedAt) < transfer.rows[0].started_at) {
+        throw new UnprocessableEntityException({ code: 'TRANSFER_COMPLETION_PRECEDES_START' });
+      }
+      await client.query(`SELECT 1 FROM app.inventory_lots WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+        [tenantId, transfer.rows[0].lot_id]);
+      await client.query(
+        `UPDATE app.inventory_transfers SET status='COMPLETED',completed_at=$3
+          WHERE tenant_id=$1 AND id=$2`, [tenantId, transferId, input.completedAt]);
+      await client.query(
+        `UPDATE app.inventory_lots SET location_id=$3,custody_status='IN_STORAGE',updated_at=now()
+          WHERE tenant_id=$1 AND id=$2`,
+        [tenantId, transfer.rows[0].lot_id, transfer.rows[0].destination_location_id]);
+      await this.recordLotEvent(client, tenantId, actorId, transfer.rows[0].lot_id, 'TRANSFER_COMPLETED', {
+        transferId, destinationLocationId: transfer.rows[0].destination_location_id,
+      }, input.reason, new Date(input.completedAt));
+      await this.record(client, tenantId, actorId, 'inventory.transfer_completed', 'inventory_transfer', transferId, input);
+      return { id: transferId, lotId: transfer.rows[0].lot_id, status: 'COMPLETED',
+        completedAt: input.completedAt };
+    });
+  }
+
+  recordLoss(tenantId: string, actorId: string, lotId: string, input: LossInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'OPERATIONS_EDIT');
+      await this.lockLot(client, tenantId, lotId);
+      const balances = await this.lotBalances(client, tenantId, lotId);
+      const quantity = new Decimal(input.quantityKg);
+      const resulting = new Decimal(balances.physicalKg).minus(quantity);
+      if (resulting.isNegative()) throw new UnprocessableEntityException({ code: 'LOSS_EXCEEDS_PHYSICAL_BALANCE' });
+      if (resulting.lessThan(balances.committedKg)) {
+        throw new UnprocessableEntityException({ code: 'LOSS_WOULD_BREAK_ACTIVE_ALLOCATIONS' });
+      }
+      const eventId = await this.recordLotEvent(client, tenantId, actorId, lotId, 'LOSS_RECORDED', {
+        quantityKg: quantity.toFixed(3), previousQuantityKg: balances.physicalKg,
+        resultingQuantityKg: resulting.toFixed(3),
+      }, input.reason, new Date(input.occurredAt));
+      await client.query(
+        `INSERT INTO app.inventory_movements
+          (tenant_id,id,lot_id,lot_event_id,movement_type,quantity_delta_kg,occurred_at,created_by)
+         VALUES ($1,$2,$3,$4,'LOSS',$5,$6,$7)`,
+        [tenantId, randomUUID(), lotId, eventId, quantity.negated().toFixed(3), input.occurredAt, actorId]);
+      await this.record(client, tenantId, actorId, 'inventory.loss_recorded', 'inventory_lot', lotId, input);
+      return { lotId, quantityKg: quantity.toFixed(3), resultingQuantityKg: resulting.toFixed(3) };
+    });
+  }
+
+  reconcileCount(tenantId: string, actorId: string, lotId: string, input: InventoryCountInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'OPERATIONS_EDIT');
+      await this.lockLot(client, tenantId, lotId);
+      const balances = await this.lotBalances(client, tenantId, lotId);
+      const counted = new Decimal(input.countedQuantityKg);
+      if (counted.lessThan(balances.committedKg)) {
+        throw new UnprocessableEntityException({ code: 'COUNT_BELOW_ACTIVE_ALLOCATIONS' });
+      }
+      const difference = counted.minus(balances.physicalKg);
+      const countId = randomUUID();
+      await client.query(
+        `INSERT INTO app.inventory_counts
+          (tenant_id,id,lot_id,system_quantity_kg,counted_quantity_kg,occurred_at,reason,created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [tenantId, countId, lotId, balances.physicalKg, counted.toFixed(3), input.occurredAt, input.reason, actorId]);
+      const eventId = await this.recordLotEvent(client, tenantId, actorId, lotId, 'COUNT_RECONCILED', {
+        countId, systemQuantityKg: balances.physicalKg, countedQuantityKg: counted.toFixed(3),
+        differenceKg: difference.toFixed(3),
+      }, input.reason, new Date(input.occurredAt));
+      if (!difference.isZero()) {
+        await client.query(
+          `INSERT INTO app.inventory_movements
+            (tenant_id,id,lot_id,lot_event_id,movement_type,quantity_delta_kg,occurred_at,created_by)
+           VALUES ($1,$2,$3,$4,'COUNT_ADJUSTMENT',$5,$6,$7)`,
+          [tenantId, randomUUID(), lotId, eventId, difference.toFixed(3), input.occurredAt, actorId]);
+      }
+      await this.record(client, tenantId, actorId, 'inventory.count_reconciled', 'inventory_lot', lotId, input);
+      return { id: countId, lotId, systemQuantityKg: balances.physicalKg,
+        countedQuantityKg: counted.toFixed(3), differenceKg: difference.toFixed(3) };
+    });
+  }
+
   async applyReceipt(client: PoolClient, input: ApplyReceiptToInventoryInput): Promise<void> {
     const previous = new Decimal(input.previousAcceptedWeightKg);
     const next = new Decimal(input.nextAcceptedWeightKg);
@@ -510,6 +731,37 @@ export class InventoryService extends InventoryReceiptPort {
       [input.tenantId, randomUUID(), lot.rows[0]!.id, input.loadId, input.receiptId,
         movementType, delta.toFixed(3), input.receivedAt, input.actorId],
     );
+  }
+
+  private async lockLot(client: PoolClient, tenantId: string, lotId: string) {
+    const lot = await client.query(
+      `SELECT 1 FROM app.inventory_lots WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenantId, lotId]);
+    if (!lot.rows[0]) throw new NotFoundException({ code: 'INVENTORY_LOT_NOT_FOUND' });
+  }
+
+  private async lotBalances(client: PoolClient, tenantId: string, lotId: string) {
+    const result = await client.query<{ physical_kg: string; committed_kg: string }>(
+      `SELECT COALESCE((SELECT sum(m.quantity_delta_kg) FROM app.inventory_movements m
+                 WHERE m.tenant_id=$1 AND m.lot_id=$2),0)::text AS physical_kg,
+              COALESCE((SELECT sum(a.quantity_kg-COALESCE((SELECT sum(d.quantity_kg)
+                 FROM app.inventory_dispatches d WHERE d.tenant_id=a.tenant_id AND d.allocation_id=a.id),0))
+                 FROM app.inventory_allocations a WHERE a.tenant_id=$1 AND a.lot_id=$2
+                   AND a.status='ACTIVE'),0)::text AS committed_kg`, [tenantId, lotId]);
+    return {
+      physicalKg: new Decimal(result.rows[0]!.physical_kg).toFixed(3),
+      committedKg: new Decimal(result.rows[0]!.committed_kg).toFixed(3),
+    };
+  }
+
+  private async recordLotEvent(client: PoolClient, tenantId: string, actorId: string, lotId: string,
+    eventType: string, payload: unknown, reason: string, occurredAt: Date) {
+    const id = randomUUID();
+    await client.query(
+      `INSERT INTO app.inventory_lot_events
+        (tenant_id,id,lot_id,event_type,payload,reason,occurred_at,created_by)
+       VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8)`,
+      [tenantId, id, lotId, eventType, JSON.stringify(payload), reason, occurredAt, actorId]);
+    return id;
   }
 
   private async assertMember(client: PoolClient, tenantId: string, actorId: string) {

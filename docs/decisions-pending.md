@@ -11,7 +11,7 @@ Essas decisões são necessárias antes da migration que amplie contrato e contr
 
 ## Antes das próximas slices especializadas
 
-- **D03 — Qualidade:** tabelas, limites, tolerâncias, contraprova e base de desconto de soja/milho, antes da slice 3.
+- **D03 — Qualidade:** `Exemplos.xlsx` já definiu os fatos operacionais (pesos, tolerância registrada, umidade, impurezas, avariados, quebrados, queimados e ardidos). Ainda faltam homologar por commodity os limites, tolerâncias, contraprova e bases de desconto; esses valores permanecem configuráveis e não são inferidos das linhas históricas.
 - **D04 — Frete:** responsável, rateio, documentos e gatilho da despesa, antes das slices 4 e 7.
 - **D05 — Fiscal MT:** estabelecimentos, regimes, operação, UPF, FETHAB, IAGRO, SENAR, fundos, bases, vigência e arredondamento, antes das slices 5 e 8.
 - **D06 — Tesouraria:** banco, extrato, aprovadores e conciliação, antes da slice 7.
@@ -23,7 +23,7 @@ Essas decisões são necessárias antes da migration que amplie contrato e contr
 
 ## Antes de declarar produção pronta
 
-- **D10 — Continuidade:** projeto Supabase separado, backup/PITR, RPO, RTO, retenção e restauração ensaiada.
+- **D10 — Continuidade:** o projeto Supabase atual foi confirmado como produção. Ainda faltam definir/validar backup/PITR, RPO, RTO, retenção e executar um ensaio de restauração.
 - **D11 — Operação:** domínios, SMTP, redirects, aceite da região, IPs de saída, administradores e MFA.
 
 Convite via API administrativa e ambiente compartilhado do piloto permanecem soluções atuais. Painel comercial do SaaS, preços, implantação e onboarding self-service são posteriores ao primeiro piloto assistido e estão em D12 no plano mestre.
@@ -32,6 +32,6 @@ Convite via API administrativa e ambiente compartilhado do piloto permanecem sol
 
 - Supabase Auth é o primeiro adaptador de identidade; tenant vem de membership verificada, não do navegador.
 - A política de margem é configurável e versionada por tenant.
-- O ambiente compartilhado do piloto usa Supabase em `sa-east-1`; produção terá projeto independente.
+- O projeto Supabase atual do Tier Trade é o banco de produção e também hospeda o bucket privado de documentos; ambientes futuros não podem compartilhar dados com ele.
 - API e worker do MVP são implantados no DigitalOcean; frontend no Vercel. O worker combinado é a configuração inicial de menor porte, sujeita a validação de capacidade e isolamento.
 - Pagamentos fiscais, estornos, lotes sujeitos a alçada e conciliação bancária exata são persistidos; contabilização continua pendente de D07.

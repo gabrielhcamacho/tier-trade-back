@@ -662,6 +662,106 @@ paths:
       responses:
         '200': { description: Nova versão publicada }
         '422': { description: Piso superior ao limite automático }
+  /v1/inventory/locations:
+    post:
+      summary: Cadastra local físico de estoque do tenant
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateInventoryLocation' } } }
+      responses: { '201': { description: Local cadastrado } }
+  /v1/inventory/lots/{lotId}/classification:
+    put:
+      summary: Classifica propriedade, risco e custódia do lote
+      parameters: [{ $ref: '#/components/parameters/LotId' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ClassifyInventoryLot' } } }
+      responses: { '200': { description: Classificação atualizada e auditada } }
+  /v1/inventory/lots/{lotId}/transfers:
+    post:
+      summary: Inicia remaneio físico do lote
+      parameters: [{ $ref: '#/components/parameters/LotId' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/StartInventoryTransfer' } } }
+      responses: { '201': { description: Remaneio iniciado } }
+  /v1/inventory/transfers/{transferId}/complete:
+    post:
+      summary: Conclui remaneio e atualiza o local do lote
+      parameters:
+        - { name: transferId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CompleteInventoryTransfer' } } }
+      responses: { '201': { description: Remaneio concluído } }
+  /v1/inventory/lots/{lotId}/losses:
+    post:
+      summary: Registra perda física sem permitir saldo negativo ou quebrar alocações
+      parameters: [{ $ref: '#/components/parameters/LotId' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/InventoryLoss' } } }
+      responses:
+        '201': { description: Perda registrada }
+        '409': { description: Perda incompatível com o saldo ou as alocações ativas }
+  /v1/inventory/lots/{lotId}/counts:
+    post:
+      summary: Reconcilia contagem física com o razão de estoque
+      parameters: [{ $ref: '#/components/parameters/LotId' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/InventoryCount' } } }
+      responses:
+        '201': { description: Contagem e eventual ajuste registrados }
+        '409': { description: Contagem incompatível com alocações ativas }
+  /v1/finance/commission-policies:
+    post:
+      summary: Publica versão de política de comissão configurável
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateCommissionPolicy' } } }
+      responses: { '201': { description: Política versionada } }
+  /v1/finance/commission-accruals:
+    post:
+      summary: Apropria comissão sobre evento financeiro auditado
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/AccrueCommission' } } }
+      responses:
+        '201': { description: Comissão apropriada }
+        '422': { description: Política de arredondamento necessária }
+  /v1/documents:
+    get:
+      summary: Lista metadados e assinaturas de documentos do tenant
+      parameters:
+        - { name: aggregateType, in: query, schema: { type: string } }
+        - { name: aggregateId, in: query, schema: { type: string, format: uuid } }
+      responses: { '200': { description: Documentos visíveis ao usuário autenticado } }
+  /v1/documents/upload-request:
+    post:
+      summary: Cria metadados e URL assinada para upload privado
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateDocumentUpload' } } }
+      responses: { '201': { description: Upload privado autorizado por tempo limitado } }
+  /v1/documents/{documentId}/complete:
+    post:
+      summary: Confirma que o arquivo foi recebido no bucket privado
+      parameters: [{ $ref: '#/components/parameters/DocumentId' }]
+      responses: { '201': { description: Documento disponível } }
+  /v1/documents/{documentId}/download:
+    get:
+      summary: Gera URL temporária de download após validar tenant e membership
+      parameters: [{ $ref: '#/components/parameters/DocumentId' }]
+      responses: { '200': { description: URL privada válida por 60 segundos } }
+  /v1/documents/{documentId}/signatures:
+    post:
+      summary: Registra estado de assinatura do documento
+      parameters: [{ $ref: '#/components/parameters/DocumentId' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/RecordDocumentSignature' } } }
+      responses: { '201': { description: Assinatura registrada } }
 components:
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
@@ -676,7 +776,113 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    LotId:
+      name: lotId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    DocumentId:
+      name: documentId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
   schemas:
+    CreateInventoryLocation:
+      type: object
+      additionalProperties: false
+      required: [code, name]
+      properties:
+        code: { type: string, pattern: '^[A-Z0-9][A-Z0-9_-]{1,31}$' }
+        name: { type: string, minLength: 2, maxLength: 120 }
+    ClassifyInventoryLot:
+      type: object
+      additionalProperties: false
+      required: [ownershipStatus, riskStatus, custodyStatus, ownerCounterpartyId, custodianCounterpartyId, reason, occurredAt]
+      properties:
+        ownershipStatus: { enum: [PENDING_DEFINITION, OWN, THIRD_PARTY] }
+        riskStatus: { enum: [PENDING_DEFINITION, ASSUMED, NOT_ASSUMED] }
+        custodyStatus: { enum: [IN_STORAGE, IN_TRANSIT, RELEASED] }
+        ownerCounterpartyId: { type: [string, 'null'], format: uuid }
+        custodianCounterpartyId: { type: [string, 'null'], format: uuid }
+        reason: { type: string, minLength: 5, maxLength: 1000 }
+        occurredAt: { type: string, format: date-time }
+    StartInventoryTransfer:
+      type: object
+      additionalProperties: false
+      required: [destinationLocationId, reason, startedAt]
+      properties:
+        destinationLocationId: { type: string, format: uuid }
+        reason: { type: string, minLength: 5, maxLength: 1000 }
+        startedAt: { type: string, format: date-time }
+    CompleteInventoryTransfer:
+      type: object
+      additionalProperties: false
+      required: [completedAt, reason]
+      properties:
+        completedAt: { type: string, format: date-time }
+        reason: { type: string, minLength: 5, maxLength: 1000 }
+    InventoryLoss:
+      type: object
+      additionalProperties: false
+      required: [quantityKg, occurredAt, reason]
+      properties:
+        quantityKg: { type: string, pattern: '^\d+(?:\.\d{1,3})?$' }
+        occurredAt: { type: string, format: date-time }
+        reason: { type: string, minLength: 5, maxLength: 1000 }
+    InventoryCount:
+      type: object
+      additionalProperties: false
+      required: [countedQuantityKg, occurredAt, reason]
+      properties:
+        countedQuantityKg: { type: string, pattern: '^\d+(?:\.\d{1,3})?$' }
+        occurredAt: { type: string, format: date-time }
+        reason: { type: string, minLength: 5, maxLength: 1000 }
+    CreateCommissionPolicy:
+      type: object
+      additionalProperties: false
+      required: [code, name, basis, ratePct, beneficiaryName, effectiveFrom, status]
+      properties:
+        code: { type: string, pattern: '^[A-Z0-9][A-Z0-9_-]{1,39}$' }
+        name: { type: string, minLength: 3, maxLength: 120 }
+        basis: { enum: [FINANCIAL_EVENT_AMOUNT] }
+        ratePct: { type: string, pattern: '^\d+(?:\.\d{1,6})?$' }
+        commodity: { enum: [MILHO, SOJA, null] }
+        beneficiaryName: { type: string, minLength: 2, maxLength: 160 }
+        effectiveFrom: { type: string, format: date }
+        effectiveTo: { type: [string, 'null'], format: date }
+        status: { enum: [DRAFT, ACTIVE] }
+    AccrueCommission:
+      type: object
+      additionalProperties: false
+      required: [policyId, financialEventId]
+      properties:
+        policyId: { type: string, format: uuid }
+        financialEventId: { type: string, format: uuid }
+    CreateDocumentUpload:
+      type: object
+      additionalProperties: false
+      required: [aggregateType, aggregateId, documentType, fileName, mimeType, sizeBytes]
+      properties:
+        aggregateType: { enum: [CONTRACT, SALES_CONTRACT, LOAD, FISCAL_DOCUMENT, COUNTERPARTY, INVENTORY_LOT] }
+        aggregateId: { type: string, format: uuid }
+        documentType: { enum: [CONTRACT_DRAFT, SIGNED_CONTRACT, AMENDMENT, GUARANTEE, INVOICE, ROMANEIO, QUALITY_REPORT, WEIGHING_TICKET, OTHER] }
+        fileName: { type: string, minLength: 1, maxLength: 240 }
+        mimeType: { enum: [application/pdf, image/jpeg, image/png, application/vnd.openxmlformats-officedocument.wordprocessingml.document, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet] }
+        sizeBytes: { type: integer, minimum: 1, maximum: 26214400 }
+        notes: { type: [string, 'null'], minLength: 1, maxLength: 1000 }
+    RecordDocumentSignature:
+      type: object
+      additionalProperties: false
+      required: [provider, signerName, signerRole, status]
+      properties:
+        provider: { enum: [MANUAL, DOCUSIGN, OTHER] }
+        externalEnvelopeId: { type: [string, 'null'] }
+        signerName: { type: string, minLength: 2, maxLength: 160 }
+        signerEmail: { type: [string, 'null'], format: email }
+        signerRole: { type: string, minLength: 2, maxLength: 80 }
+        status: { enum: [PENDING, SENT, SIGNED, DECLINED, CANCELLED] }
+        sentAt: { type: [string, 'null'], format: date-time }
+        signedAt: { type: [string, 'null'], format: date-time }
     RescheduleLoad:
       type: object
       additionalProperties: false

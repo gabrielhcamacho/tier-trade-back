@@ -4,11 +4,23 @@ import { Identity, type RequestIdentity, RequestIdentityGuard } from '../auth/re
 import { SchemaPipe } from '../common/schema.pipe.js';
 import {
   allocationSchema,
+  completeTransferSchema,
   dispatchSchema,
+  inventoryCountSchema,
+  inventoryLocationSchema,
+  lossSchema,
+  lotClassificationSchema,
   salesContractSchema,
+  startTransferSchema,
   type AllocationInput,
+  type CompleteTransferInput,
   type DispatchInput,
+  type InventoryCountInput,
+  type InventoryLocationInput,
+  type LossInput,
+  type LotClassificationInput,
   type SalesContractInput,
+  type StartTransferInput,
 } from './inventory.schemas.js';
 import { InventoryService } from './inventory.service.js';
 
@@ -59,5 +71,46 @@ export class InventoryController {
   dispatch(@Identity() identity: RequestIdentity,
     @Body(new SchemaPipe(dispatchSchema)) input: DispatchInput) {
     return this.service.dispatch(identity.tenantId, identity.actorId, input);
+  }
+
+  @Post('locations')
+  createLocation(@Identity() identity: RequestIdentity,
+    @Body(new SchemaPipe(inventoryLocationSchema)) input: InventoryLocationInput) {
+    return this.service.createLocation(identity.tenantId, identity.actorId, input);
+  }
+
+  @Put('lots/:lotId/classification')
+  classifyLot(@Identity() identity: RequestIdentity,
+    @Param('lotId', ParseUUIDPipe) lotId: string,
+    @Body(new SchemaPipe(lotClassificationSchema)) input: LotClassificationInput) {
+    return this.service.classifyLot(identity.tenantId, identity.actorId, lotId, input);
+  }
+
+  @Post('lots/:lotId/transfers')
+  startTransfer(@Identity() identity: RequestIdentity,
+    @Param('lotId', ParseUUIDPipe) lotId: string,
+    @Body(new SchemaPipe(startTransferSchema)) input: StartTransferInput) {
+    return this.service.startTransfer(identity.tenantId, identity.actorId, lotId, input);
+  }
+
+  @Post('transfers/:transferId/complete')
+  completeTransfer(@Identity() identity: RequestIdentity,
+    @Param('transferId', ParseUUIDPipe) transferId: string,
+    @Body(new SchemaPipe(completeTransferSchema)) input: CompleteTransferInput) {
+    return this.service.completeTransfer(identity.tenantId, identity.actorId, transferId, input);
+  }
+
+  @Post('lots/:lotId/losses')
+  recordLoss(@Identity() identity: RequestIdentity,
+    @Param('lotId', ParseUUIDPipe) lotId: string,
+    @Body(new SchemaPipe(lossSchema)) input: LossInput) {
+    return this.service.recordLoss(identity.tenantId, identity.actorId, lotId, input);
+  }
+
+  @Post('lots/:lotId/counts')
+  reconcileCount(@Identity() identity: RequestIdentity,
+    @Param('lotId', ParseUUIDPipe) lotId: string,
+    @Body(new SchemaPipe(inventoryCountSchema)) input: InventoryCountInput) {
+    return this.service.reconcileCount(identity.tenantId, identity.actorId, lotId, input);
   }
 }

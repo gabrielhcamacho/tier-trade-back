@@ -4,9 +4,11 @@ import { Identity, type RequestIdentity, RequestIdentityGuard } from '../auth/re
 import { SchemaPipe } from '../common/schema.pipe.js';
 import {
   configureFinancePolicySchema,
+  accrueCommissionSchema,
   createBankAccountSchema,
   createBankStatementEntrySchema,
   createPaymentBatchSchema,
+  createCommissionPolicySchema,
   createPurchaseCostComponentSchema,
   createTitleSchema,
   payTitleSchema,
@@ -14,9 +16,11 @@ import {
   reverseSettlementSchema,
   settleTitleSchema,
   type ConfigureFinancePolicyInput,
+  type AccrueCommissionInput,
   type CreateBankAccountInput,
   type CreateBankStatementEntryInput,
   type CreatePaymentBatchInput,
+  type CreateCommissionPolicyInput,
   type CreatePurchaseCostComponentInput,
   type CreateTitleInput,
   type PayTitleInput,
@@ -50,6 +54,18 @@ export class FinanceController {
   createPurchaseCostComponent(@Identity() identity: RequestIdentity,
     @Body(new SchemaPipe(createPurchaseCostComponentSchema)) input: CreatePurchaseCostComponentInput) {
     return this.governance.createPurchaseCostComponent(identity.tenantId, identity.actorId, input);
+  }
+
+  @Post('commission-policies')
+  createCommissionPolicy(@Identity() identity: RequestIdentity,
+    @Body(new SchemaPipe(createCommissionPolicySchema)) input: CreateCommissionPolicyInput) {
+    return this.governance.createCommissionPolicy(identity.tenantId, identity.actorId, input);
+  }
+
+  @Post('commission-accruals')
+  accrueCommission(@Identity() identity: RequestIdentity,
+    @Body(new SchemaPipe(accrueCommissionSchema)) input: AccrueCommissionInput) {
+    return this.governance.accrueCommission(identity.tenantId, identity.actorId, input);
   }
 
   @Post('purchase-cost-components/:componentId/reverse')

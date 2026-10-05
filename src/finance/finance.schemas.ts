@@ -68,6 +68,25 @@ export const reconcileBankStatementEntrySchema = z.object({
   matchedId: z.uuid(),
 });
 
+export const createCommissionPolicySchema = z.object({
+  code: z.string().trim().toUpperCase().regex(/^[A-Z0-9][A-Z0-9_-]{1,39}$/),
+  name: z.string().trim().min(3).max(120),
+  status: z.enum(['DRAFT', 'ACTIVE']),
+  basis: z.literal('FINANCIAL_EVENT_AMOUNT'),
+  ratePct: z.string().regex(/^\d+(?:\.\d{1,6})?$/).refine((value) => Number(value) <= 100),
+  commodity: z.enum(['MILHO', 'SOJA']).nullable(),
+  beneficiaryName: z.string().trim().min(2).max(160),
+  effectiveFrom: z.iso.date(),
+  effectiveTo: z.iso.date().nullable(),
+}).refine((value) => !value.effectiveTo || value.effectiveTo >= value.effectiveFrom, {
+  path: ['effectiveTo'], message: 'Effective end must not precede start.',
+});
+
+export const accrueCommissionSchema = z.object({
+  policyId: z.uuid(),
+  financialEventId: z.uuid(),
+});
+
 export type CreateTitleInput = z.infer<typeof createTitleSchema>;
 export type SettleTitleInput = z.infer<typeof settleTitleSchema>;
 export type PayTitleInput = z.infer<typeof payTitleSchema>;
@@ -78,3 +97,5 @@ export type CreatePaymentBatchInput = z.infer<typeof createPaymentBatchSchema>;
 export type CreateBankAccountInput = z.infer<typeof createBankAccountSchema>;
 export type CreateBankStatementEntryInput = z.infer<typeof createBankStatementEntrySchema>;
 export type ReconcileBankStatementEntryInput = z.infer<typeof reconcileBankStatementEntrySchema>;
+export type CreateCommissionPolicyInput = z.infer<typeof createCommissionPolicySchema>;
+export type AccrueCommissionInput = z.infer<typeof accrueCommissionSchema>;

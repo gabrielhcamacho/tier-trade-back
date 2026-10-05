@@ -49,6 +49,9 @@ describe.runIf(Boolean(databaseUrl))('sales fulfillment and inventory ledger', (
       '20261005010100_grant_purchase_finance_runtime.sql',
       '20261005021155_finance_governance_and_realized_margin.sql',
       '20261005023251_cover_finance_governance_foreign_keys.sql',
+      '20261005160713_operational_completeness_foundation.sql',
+      '20261005160901_cover_operational_completeness_foreign_keys.sql',
+      '20261005161634_demo_reset_operational_completeness.sql',
     ];
     for (const migration of migrations) {
       await setup.query(await readFile(new URL(`../../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
@@ -148,6 +151,57 @@ describe.runIf(Boolean(databaseUrl))('sales fulfillment and inventory ledger', (
     });
     expect(final.json().movements).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'DISPATCH', quantityDeltaKg: '-4000.000', allocationId: allocation.json().id }),
+    ]));
+
+    const location = await server.inject({
+      method: 'POST', url: '/v1/inventory/locations', headers,
+      payload: { code: 'ARMAZEM_02', name: 'Armazém secundário' },
+    });
+    expect(location.statusCode, location.body).toBe(201);
+    const lotId = initial.json().lots[0].id;
+    const classification = await server.inject({
+      method: 'PUT', url: `/v1/inventory/lots/${lotId}/classification`, headers,
+      payload: { ownershipStatus: 'OWN', riskStatus: 'ASSUMED', custodyStatus: 'IN_STORAGE',
+        ownerCounterpartyId: null, custodianCounterpartyId: null,
+        occurredAt: '2026-10-02T11:00:00-03:00', reason: 'Classificação operacional homologada.' },
+    });
+    expect(classification.statusCode, classification.body).toBe(200);
+
+    const transfer = await server.inject({
+      method: 'POST', url: `/v1/inventory/lots/${lotId}/transfers`, headers,
+      payload: { destinationLocationId: location.json().id,
+        startedAt: '2026-10-02T12:00:00-03:00', reason: 'Remaneio para capacidade operacional.' },
+    });
+    expect(transfer.statusCode, transfer.body).toBe(201);
+    const completed = await server.inject({
+      method: 'POST', url: `/v1/inventory/transfers/${transfer.json().id}/complete`, headers,
+      payload: { completedAt: '2026-10-02T14:00:00-03:00', reason: 'Remaneio recebido e conferido.' },
+    });
+    expect(completed.statusCode, completed.body).toBe(201);
+
+    const loss = await server.inject({
+      method: 'POST', url: `/v1/inventory/lots/${lotId}/losses`, headers,
+      payload: { quantityKg: '100.000', occurredAt: '2026-10-02T15:00:00-03:00',
+        reason: 'Perda operacional apurada em conferência.' },
+    });
+    expect(loss.statusCode, loss.body).toBe(201);
+    const count = await server.inject({
+      method: 'POST', url: `/v1/inventory/lots/${lotId}/counts`, headers,
+      payload: { countedQuantityKg: '20750.000', occurredAt: '2026-10-02T16:00:00-03:00',
+        reason: 'Inventário físico mensal conferido.' },
+    });
+    expect(count.statusCode, count.body).toBe(201);
+
+    const governed = await server.inject({ method: 'GET', url: '/v1/inventory', headers });
+    expect(governed.statusCode, governed.body).toBe(200);
+    expect(governed.json()).toMatchObject({
+      summary: { physicalWeightKg: '20750.000' },
+      transfers: [{ status: 'COMPLETED', destination_location_code: 'ARMAZEM_02' }],
+      counts: [{ counted_quantity_kg: '20750.000', difference_kg: '-70.000' }],
+    });
+    expect(governed.json().movements).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'LOSS', quantityDeltaKg: '-100.000' }),
+      expect.objectContaining({ type: 'COUNT_ADJUSTMENT', quantityDeltaKg: '-70.000' }),
     ]));
   });
 });

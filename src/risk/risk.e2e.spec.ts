@@ -48,6 +48,9 @@ describe.runIf(Boolean(databaseUrl))('risk position', () => {
       '20261005010100_grant_purchase_finance_runtime.sql',
       '20261005021155_finance_governance_and_realized_margin.sql',
       '20261005023251_cover_finance_governance_foreign_keys.sql',
+      '20261005160713_operational_completeness_foundation.sql',
+      '20261005160901_cover_operational_completeness_foreign_keys.sql',
+      '20261005161634_demo_reset_operational_completeness.sql',
     ];
     for (const migration of migrations) {
       await setup.query(await readFile(new URL(`../../supabase/migrations/${migration}`, import.meta.url), 'utf8'));

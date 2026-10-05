@@ -49,6 +49,9 @@ describe.runIf(Boolean(databaseUrl))('financial receivables', () => {
       '20261005010100_grant_purchase_finance_runtime.sql',
       '20261005021155_finance_governance_and_realized_margin.sql',
       '20261005023251_cover_finance_governance_foreign_keys.sql',
+      '20261005160713_operational_completeness_foundation.sql',
+      '20261005160901_cover_operational_completeness_foreign_keys.sql',
+      '20261005161634_demo_reset_operational_completeness.sql',
     ];
     for (const migration of migrations) {
       await setup.query(await readFile(new URL(`../../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
@@ -116,6 +119,20 @@ describe.runIf(Boolean(databaseUrl))('financial receivables', () => {
     expect(dispatch.statusCode, dispatch.body).toBe(201);
     expect(dispatch.json()).toMatchObject({ calculationStatus: 'READY' });
 
+    const commissionPolicy = await server.inject({
+      method: 'POST', url: '/v1/finance/commission-policies', headers,
+      payload: { code: 'COM_VENDAS', name: 'Comissão comercial de vendas', status: 'ACTIVE',
+        basis: 'FINANCIAL_EVENT_AMOUNT', ratePct: '2', commodity: 'MILHO',
+        beneficiaryName: 'Equipe comercial', effectiveFrom: '2026-10-01', effectiveTo: null },
+    });
+    expect(commissionPolicy.statusCode, commissionPolicy.body).toBe(201);
+    const commission = await server.inject({
+      method: 'POST', url: '/v1/finance/commission-accruals', headers,
+      payload: { policyId: commissionPolicy.json().id, financialEventId: dispatch.json().financialEventId },
+    });
+    expect(commission.statusCode, commission.body).toBe(201);
+    expect(commission.json()).toMatchObject({ basisAmount: '1500.00', commissionAmount: '30.00' });
+
     const title = await server.inject({
       method: 'POST', url: '/v1/finance/titles', headers,
       payload: {
@@ -162,6 +179,12 @@ describe.runIf(Boolean(databaseUrl))('financial receivables', () => {
     });
     expect(reversal.statusCode, reversal.body).toBe(201);
     expect(reversal.json()).toMatchObject({ status: 'OPEN', reversed: true });
+
+    const workspace = await server.inject({ method: 'GET', url: '/v1/finance', headers });
+    expect(workspace.json().governance).toMatchObject({
+      commissionPolicies: [expect.objectContaining({ code: 'COM_VENDAS', status: 'ACTIVE' })],
+      commissionAccruals: [expect.objectContaining({ commission_amount: '30.00' })],
+    });
   });
 
   it('does not silently round a forecast without a configured policy', async () => {
@@ -198,5 +221,61 @@ describe.runIf(Boolean(databaseUrl))('financial receivables', () => {
     });
     expect(title.statusCode).toBe(409);
     expect(title.json()).toMatchObject({ code: 'ROUNDING_POLICY_REQUIRED' });
+  });
+
+  it('lists document metadata and records its signature with audit and outbox events', async () => {
+    const documentId = 'e9000000-0000-4000-8000-000000000001';
+    const setup = new Pool({ connectionString: databaseUrl });
+    const client = await setup.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query("SELECT set_config('app.tenant_id',$1,true)", [tenantId]);
+      await client.query(
+        `INSERT INTO app.documents
+          (tenant_id,id,aggregate_type,aggregate_id,document_type,file_name,mime_type,size_bytes,
+           storage_path,status,version,uploaded_at,created_by)
+         VALUES ($1,$2,'CONTRACT',$3,'SIGNED_CONTRACT','contrato.pdf','application/pdf',128,
+                 $4,'AVAILABLE',1,now(),$5)`,
+        [tenantId, documentId, 'd5000000-0000-4000-8000-000000000001',
+          `${tenantId}/contract/d5000000-0000-4000-8000-000000000001/${documentId}/contrato.pdf`, actorId],
+      );
+      await client.query('COMMIT');
+    } finally {
+      client.release();
+      await setup.end();
+    }
+
+    const server = app.getHttpAdapter().getInstance();
+    const signature = await server.inject({
+      method: 'POST', url: `/v1/documents/${documentId}/signatures`, headers,
+      payload: {
+        provider: 'MANUAL', externalEnvelopeId: null, signerName: 'Diretoria JD',
+        signerEmail: null, signerRole: 'Compradora', status: 'SIGNED', sentAt: null,
+        signedAt: '2026-10-05T12:00:00-03:00',
+      },
+    });
+    expect(signature.statusCode, signature.body).toBe(201);
+
+    const documents = await server.inject({
+      method: 'GET',
+      url: `/v1/documents?aggregateType=CONTRACT&aggregateId=d5000000-0000-4000-8000-000000000001`,
+      headers,
+    });
+    expect(documents.statusCode, documents.body).toBe(200);
+    expect(documents.json().items).toEqual([
+      expect.objectContaining({
+        id: documentId, status: 'AVAILABLE', version: 1,
+        signatures: [expect.objectContaining({ signerName: 'Diretoria JD', status: 'SIGNED' })],
+      }),
+    ]);
+
+    const eventPool = new Pool({ connectionString: databaseUrl });
+    const events = await eventPool.query(
+      `SELECT event_type FROM app.outbox_events
+        WHERE tenant_id=$1 AND aggregate_type='document' AND aggregate_id=$2`,
+      [tenantId, documentId],
+    );
+    await eventPool.end();
+    expect(events.rows).toEqual([{ event_type: 'document.signature_recorded' }]);
   });
 });

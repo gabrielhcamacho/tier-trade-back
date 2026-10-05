@@ -47,6 +47,9 @@ export const recordLoadReceiptSchema = z.object({
   moisturePct: percentageDecimal,
   impurityPct: percentageDecimal,
   damagedPct: percentageDecimal,
+  brokenPct: percentageDecimal.default('0'),
+  burntPct: percentageDecimal.default('0'),
+  heatDamagedPct: percentageDecimal.default('0'),
   qualityDecision: z.enum(['ACCEPTED', 'REVIEW_REQUIRED']),
   notes: z.string().trim().min(1).max(1000).nullable(),
 }).superRefine((value, context) => {
