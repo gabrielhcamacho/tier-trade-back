@@ -31,6 +31,18 @@ Validar ponta a ponta o primeiro piloto da JD para compras e vendas de soja e mi
 
 Os valores usados nessas provas são dados demonstrativos explícitos. A execução comprova encadeamento, persistência, rastreabilidade e isolamento; não homologa regras comerciais, fiscais ou de qualidade da JD.
 
+## Estado publicado em 05/10/2026
+
+- frontend e backend de produção responderam com saúde normal;
+- acesso autenticado com a conta de demonstração foi validado no ambiente publicado;
+- contratos, cargas e fiscal exibem o fluxo integrado de documentos e evidências, com seleção do tipo, observação, envio e histórico;
+- o download usa uma URL temporária emitida pelo backend e o arquivo permanece no bucket privado `tier-trade-documents`;
+- financeiro exibe o cadastro versionado de políticas de comissão e a apropriação de comissão sobre valor-base persistido;
+- as páginas verificadas não apresentaram sobreposição de erro nem erro de aplicação no navegador;
+- a verificação desta data foi somente de leitura para não inserir arquivo, política ou apropriação artificial na conta de demonstração.
+
+O próximo aceite técnico controlado deve usar um documento e valores deliberadamente escolhidos para o piloto, confirmar a persistência e depois decidir se esses registros permanecem como dados demonstrativos.
+
 ## Cenários mínimos para aceite humano
 
 | Cenário | Commodity | Operação | Resultado esperado |
