@@ -492,4 +492,183 @@ describe.runIf(Boolean(databaseUrl))('fiscal document registry', () => {
       operational: { purchasePayablesOpen: 1 },
     });
   });
+
+  it('homologates the complete soybean purchase, adjustment, sale and partial receipt scenario', async () => {
+    const server = app.getHttpAdapter().getInstance();
+    const policy = await server.inject({
+      method: 'PATCH', url: '/v1/settings/margin-policy', headers,
+      payload: { commodity: 'SOJA', autoApprovalMarginPerSc: '6.00', absoluteFloorMarginPerSc: '2.00' },
+    });
+    expect(policy.statusCode, policy.body).toBe(200);
+    const offer = await server.inject({
+      method: 'POST', url: '/v1/offers', headers,
+      payload: {
+        counterpartyId: 'd1000000-0000-4000-8000-000000000001', commodity: 'SOJA', unit: 'SC_60KG',
+        quantitySc: '1000', deliveryStart: '2026-11-01', deliveryEnd: '2026-11-30',
+        purchasePricePerSc: '100.00', saleReferencePerSc: '112.00',
+        costs: [{ code: 'FREIGHT', amountPerSc: '4.00' }],
+      },
+    });
+    expect(offer.statusCode, offer.body).toBe(201);
+    const submitted = await server.inject({
+      method: 'POST', url: `/v1/offers/${offer.json().offerId}/submit`, headers,
+    });
+    expect(submitted.json()).toMatchObject({ decision: 'AUTO_APPROVED', status: 'APPROVED' });
+    const contract = await server.inject({
+      method: 'POST', url: `/v1/offers/${offer.json().offerId}/activate-contract`, headers,
+    });
+    expect(contract.statusCode, contract.body).toBe(201);
+    const load = await server.inject({
+      method: 'POST', url: `/v1/contracts/${contract.json().contractId}/loads`, headers,
+      payload: {
+        scheduledLocal: '2026-11-10T08:30', expectedWeightKg: '12000.000',
+        vehiclePlate: 'SOJ-1A23', carrierName: 'Transportadora cenário JD', destinationCode: 'ARM-MT01',
+      },
+    });
+    expect(load.statusCode, load.body).toBe(201);
+    const started = await server.inject({
+      method: 'POST', url: `/v1/loads/${load.json().id}/start-receiving`, headers,
+    });
+    expect(started.statusCode, started.body).toBe(201);
+    const occurrence = await server.inject({
+      method: 'POST', url: `/v1/loads/${load.json().id}/occurrences`, headers,
+      payload: {
+        category: 'QUALITY', severity: 'WARNING', title: 'Contraprova do peso aceito',
+        description: 'Cenário técnico JD-02: ocorrência registrada antes da correção versionada.',
+        occurredAt: '2026-11-10T09:10:00-03:00',
+      },
+    });
+    expect(occurrence.statusCode, occurrence.body).toBe(201);
+    const baseReceipt = {
+      receivedAt: '2026-11-10T09:20:00-03:00', inboundInvoiceNumber: 'NF-JD-SOJA-001',
+      inboundInvoiceSeries: '1', inboundInvoiceAccessKey: '51261112345678000190550010000001231000001234',
+      documentWeightKg: '12000.000', grossWeightKg: '27000.000', tareWeightKg: '15000.000',
+      consideredWeightKg: '12000.000', acceptedWeightKg: '12000.000', weightDecisionReason: null,
+      weighingMode: 'SCALE', scaleTicketNumber: 'BAL-JD-SOJA-001', contingencyReason: null,
+      moisturePct: '13.5000', impurityPct: '1.0000', damagedPct: '2.0000',
+      qualityDecision: 'ACCEPTED', notes: 'Cenário técnico de soja com valores explícitos, não homologados.',
+    };
+    const receipt = await server.inject({
+      method: 'PUT', url: `/v1/loads/${load.json().id}/receipt`, headers, payload: baseReceipt,
+    });
+    expect(receipt.statusCode, receipt.body).toBe(200);
+    const firstReport = await server.inject({
+      method: 'POST', url: `/v1/loads/${load.json().id}/romaneio`, headers,
+    });
+    expect(firstReport.json()).toMatchObject({ version: 1, acceptedWeightKg: '12000.000' });
+    const corrected = await server.inject({
+      method: 'PUT', url: `/v1/loads/${load.json().id}/receipt`, headers,
+      payload: { ...baseReceipt, consideredWeightKg: '11940.000', acceptedWeightKg: '11940.000',
+        weightDecisionReason: 'Contraprova técnica reduziu sessenta quilos do peso aceito.' },
+    });
+    expect(corrected.statusCode, corrected.body).toBe(200);
+    const secondReport = await server.inject({
+      method: 'POST', url: `/v1/loads/${load.json().id}/romaneio`, headers,
+    });
+    expect(secondReport.json()).toMatchObject({ version: 2, acceptedWeightKg: '11940.000' });
+    const resolved = await server.inject({
+      method: 'POST', url: `/v1/loads/${load.json().id}/occurrences/${occurrence.json().id}/resolve`, headers,
+      payload: { resolution: 'Contraprova registrada na segunda versão do recebimento e do romaneio.' },
+    });
+    expect(resolved.json()).toMatchObject({ status: 'RESOLVED' });
+
+    const purchase = await server.inject({
+      method: 'POST', url: '/v1/fiscal/purchase-documents', headers,
+      payload: {
+        loadReceiptId: corrected.json().receipt.id, documentNumber: 'NF-JD-SOJA-001',
+        accessKey: '51261112345678000190550010000001231000001234', issuedAt: '2026-11-10T09:30:00-03:00',
+        totalAmount: '19900.00', dueDate: '2026-11-20', titleNumber: 'CP-JD-SOJA-001',
+        validationNotes: 'Valor conferido contra 199 sacas aceitas a R$ 100,00.',
+      },
+    });
+    expect(purchase.statusCode, purchase.body).toBe(201);
+    const validatedPurchase = await server.inject({
+      method: 'POST', url: `/v1/fiscal/documents/${purchase.json().id}/validate`, headers,
+    });
+    expect(validatedPurchase.json()).toMatchObject({ status: 'VALIDATED', linkedTitleId: expect.any(String) });
+    const finance = await server.inject({ method: 'GET', url: '/v1/finance', headers });
+    const purchaseEvent = finance.json().events.find((event: { loadReceiptId: string }) =>
+      event.loadReceiptId === corrected.json().receipt.id) as { id: string };
+    const discount = await server.inject({
+      method: 'POST', url: '/v1/finance/purchase-cost-components', headers,
+      payload: {
+        financialEventId: purchaseEvent.id, componentType: 'QUALITY_DISCOUNT', payableImpact: 'REDUCE_PAYABLE',
+        amount: '100.00', description: 'Valor explícito para exercitar o ajuste; sujeito à homologação da JD.',
+        externalReference: 'CONTRAPROVA-JD-SOJA-001',
+      },
+    });
+    expect(discount.statusCode, discount.body).toBe(201);
+
+    const inventory = await server.inject({ method: 'GET', url: '/v1/inventory', headers });
+    const soyLot = inventory.json().lots.find((lot: { commodity: string; sourceLoadId: string }) =>
+      lot.commodity === 'SOJA' && lot.sourceLoadId === load.json().id) as { id: string };
+    expect(soyLot).toBeTruthy();
+    const sale = await server.inject({
+      method: 'POST', url: '/v1/inventory/sales-contracts', headers,
+      payload: {
+        counterpartyId: 'd1000000-0000-4000-8000-000000000005', reference: 'CV-JD-SOJA-001',
+        commodity: 'SOJA', quantityKg: '6000.000', salePricePerKg: '3.000000', destinationCode: 'IND-MT01',
+        deliveryStart: '2026-11-10', deliveryEnd: '2026-11-30', requiredDocuments: ['Nota fiscal'],
+        paymentTermDays: 7,
+      },
+    });
+    expect(sale.statusCode, sale.body).toBe(201);
+    const allocation = await server.inject({
+      method: 'POST', url: '/v1/inventory/allocations', headers,
+      payload: { salesContractId: sale.json().id, lotId: soyLot.id, quantityKg: '6000.000' },
+    });
+    const dispatch = await server.inject({
+      method: 'POST', url: '/v1/inventory/dispatches', headers,
+      payload: {
+        allocationId: allocation.json().id, quantityKg: '2000.000', dispatchedAt: '2026-11-12T10:00:00-03:00',
+        vehiclePlate: 'VEN-4D56', documentReference: 'NFV-JD-SOJA-001', notes: 'Expedição parcial JD-03.',
+      },
+    });
+    expect(dispatch.statusCode, dispatch.body).toBe(201);
+    const saleTitle = await server.inject({
+      method: 'POST', url: '/v1/finance/titles', headers,
+      payload: {
+        financialEventId: dispatch.json().financialEventId, titleNumber: 'TR-JD-SOJA-001',
+        documentReference: 'NFV-JD-SOJA-001', dueDate: '2026-11-19',
+      },
+    });
+    expect(saleTitle.json()).toMatchObject({ amount: '6000.00', status: 'OPEN' });
+    const outbound = await server.inject({
+      method: 'POST', url: '/v1/fiscal/documents', headers,
+      payload: {
+        financialEventId: dispatch.json().financialEventId, documentNumber: 'NFV-JD-SOJA-001',
+        accessKey: '51261112345678000190550010000001231000005678', issuedAt: '2026-11-12T10:05:00-03:00',
+        totalAmount: '6000.00', validationNotes: 'NF-e de saída do cenário técnico JD-03.',
+      },
+    });
+    expect(outbound.statusCode, outbound.body).toBe(201);
+    const validatedOutbound = await server.inject({
+      method: 'POST', url: `/v1/fiscal/documents/${outbound.json().id}/validate`, headers,
+    });
+    expect(validatedOutbound.json()).toMatchObject({ status: 'VALIDATED', linkedTitleId: saleTitle.json().id });
+    const partial = await server.inject({
+      method: 'POST', url: `/v1/finance/titles/${saleTitle.json().id}/settlements`, headers,
+      payload: {
+        amount: '2000.00', receivedAt: '2026-11-19T10:00:00-03:00', bankReference: 'PIX-JD-SOJA-001',
+        notes: 'Recebimento parcial do cenário técnico JD-04.',
+      },
+    });
+    expect(partial.json()).toMatchObject({ status: 'PARTIALLY_SETTLED', outstandingAmount: '4000.00' });
+    const account = await server.inject({
+      method: 'POST', url: '/v1/finance/bank-accounts', headers,
+      payload: { code: 'JD01', name: 'Conta técnica do cenário JD' },
+    });
+    const statement = await server.inject({
+      method: 'POST', url: '/v1/finance/bank-statement-entries', headers,
+      payload: {
+        bankAccountId: account.json().id, occurredAt: '2026-11-19T10:01:00-03:00', direction: 'CREDIT',
+        amount: '2000.00', bankReference: 'EXT-JD-SOJA-001', description: 'Crédito parcial para conciliação.',
+      },
+    });
+    const reconciled = await server.inject({
+      method: 'POST', url: `/v1/finance/bank-statement-entries/${statement.json().id}/reconcile`, headers,
+      payload: { matchedType: 'SETTLEMENT', matchedId: partial.json().id },
+    });
+    expect(reconciled.json()).toMatchObject({ status: 'MATCHED' });
+  });
 });

@@ -50,7 +50,8 @@ describe('commercial foundation migration', () => {
         ('11111111-1111-4111-8111-111111111111','A','America/Sao_Paulo'),
         ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','B','America/Sao_Paulo');
       INSERT INTO app.memberships (tenant_id,user_id,capabilities) VALUES
-        ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',ARRAY['COMMERCIAL_EDIT']);
+        ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',ARRAY['COMMERCIAL_EDIT']),
+        ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','dddddddd-dddd-4ddd-8ddd-dddddddddddd',ARRAY['FINANCE_EDIT']);
       INSERT INTO app.counterparties (tenant_id,id,legal_name,tax_id) VALUES
         ('11111111-1111-4111-8111-111111111111','33333333-3333-4333-8333-333333333333','A supplier','1'),
         ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','B supplier','2');
@@ -58,6 +59,9 @@ describe('commercial foundation migration', () => {
         (tenant_id,event_id,event_type,aggregate_type,aggregate_id,payload,occurred_at) VALUES
         ('11111111-1111-4111-8111-111111111111','44444444-4444-4444-8444-444444444444','offer.created','offer','33333333-3333-4333-8333-333333333333','{}',now()),
         ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','cccccccc-cccc-4ccc-8ccc-cccccccccccc','offer.created','offer','bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','{}',now());
+      INSERT INTO app.bank_accounts (tenant_id,id,code,name,created_by) VALUES
+        ('11111111-1111-4111-8111-111111111111','eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee','A001','Conta tenant A','22222222-2222-4222-8222-222222222222'),
+        ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','ffffffff-ffff-4fff-8fff-ffffffffffff','B001','Conta tenant B','dddddddd-dddd-4ddd-8ddd-dddddddddddd');
       CREATE ROLE app_runtime NOLOGIN NOSUPERUSER NOBYPASSRLS;
       GRANT USAGE ON SCHEMA app TO app_runtime;
       GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA app TO app_runtime;
@@ -111,6 +115,15 @@ describe('commercial foundation migration', () => {
     expect(visibleFinancialAdjustments.rows).toEqual([{ count: 0 }]);
     const visibleFinancialPayments = await db.query<{ count: number }>('SELECT count(*)::int AS count FROM app.financial_payments');
     expect(visibleFinancialPayments.rows).toEqual([{ count: 0 }]);
+    const visibleBankAccounts = await db.query<{ code: string }>('SELECT code FROM app.bank_accounts ORDER BY code');
+    expect(visibleBankAccounts.rows).toEqual([{ code: 'A001' }]);
+    for (const table of [
+      'purchase_cost_components', 'finance_policies', 'payment_batches', 'payment_batch_items',
+      'bank_statement_entries',
+    ]) {
+      const result = await db.query<{ count: number }>(`SELECT count(*)::int AS count FROM app.${table}`);
+      expect(result.rows).toEqual([{ count: 0 }]);
+    }
     const visibleSalesVersions = await db.query<{ count: number }>('SELECT count(*)::int AS count FROM app.sales_contract_versions');
     expect(visibleSalesVersions.rows).toEqual([{ count: 0 }]);
     await db.exec('RESET ROLE');

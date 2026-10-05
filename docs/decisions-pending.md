@@ -7,7 +7,7 @@ O registro principal, com responsáveis por função e momento limite, está no 
 - **D01 — Recorte do piloto:** trading de referência e de contraste, unidade, commodities, operações e modalidades reais. Responsáveis sugeridos: produto e parceiros piloto.
 - **D02 — Modalidades:** preço a fixar, fixação parcial, base/prêmio/câmbio e quatro cenários de aceite. Responsáveis sugeridos: direção comercial e produto.
 
-Essas decisões são necessárias antes da migration que amplie contrato e contraparte. O Escopo do MVP 1.2 inclui soja e milho e preço fixo ou a fixar. Uma redução formal de recorte exige registrar a decisão e atualizar os testes de aceite.
+Essas decisões são necessárias antes da migration que amplie contrato e contraparte. O Escopo do MVP 1.2 inclui soja e milho e preço fixo ou a fixar. Uma redução formal de recorte exige registrar a decisão e atualizar os testes de aceite. A espera pelo contrato de compra da JD não impede os testes técnicos de preço fixo; preço a fixar e fixações parciais continuam bloqueados especificamente pela falta de base, prêmio, câmbio e cenários homologados de D02.
 
 ## Antes das próximas slices especializadas
 
@@ -34,4 +34,4 @@ Convite via API administrativa e ambiente compartilhado do piloto permanecem sol
 - A política de margem é configurável e versionada por tenant.
 - O ambiente compartilhado do piloto usa Supabase em `sa-east-1`; produção terá projeto independente.
 - API e worker do MVP são implantados no DigitalOcean; frontend no Vercel. O worker combinado é a configuração inicial de menor porte, sujeita a validação de capacidade e isolamento.
-- Pagamentos fiscais e estornos são persistidos; conciliação bancária e contabilização continuam pendentes.
+- Pagamentos fiscais, estornos, lotes sujeitos a alçada e conciliação bancária exata são persistidos; contabilização continua pendente de D07.

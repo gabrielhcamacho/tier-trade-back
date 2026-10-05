@@ -19,6 +19,15 @@ Validar ponta a ponta o primeiro piloto da JD para compras e vendas de soja e mi
 - importação de extrato e conciliação exata de crédito/recebimento ou débito/pagamento;
 - isolamento por tenant, RLS, auditoria e eventos de saída.
 
+### Evidência executável disponível
+
+- cenário integrado de soja: oferta e margem, aprovação automática, contrato de compra, carga, recebimento, ocorrência, correção versionada do romaneio, NF-e e título de compra, desconto de qualidade explícito, lote de estoque, contrato de venda, alocação, expedição, NF-e de saída, recebimento parcial e conciliação bancária;
+- cenário integrado de milho: compra, recebimento, estoque, venda, expedição e financeiro;
+- teste de isolamento RLS para contas bancárias, componentes de custo de compra, políticas financeiras, lotes de pagamento, itens do lote e lançamentos de extrato;
+- contrato OpenAPI atualizado para os fluxos fiscais de compra e para governança, lotes e conciliação financeira.
+
+Os valores usados nessas provas são dados demonstrativos explícitos. A execução comprova encadeamento, persistência, rastreabilidade e isolamento; não homologa regras comerciais, fiscais ou de qualidade da JD.
+
 ## Cenários mínimos para aceite humano
 
 | Cenário | Commodity | Operação | Resultado esperado |

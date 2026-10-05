@@ -314,9 +314,103 @@ paths:
         '422': { description: Saldo alocado ou físico insuficiente }
   /v1/finance:
     get:
-      summary: Retorna previsões de recebimento, títulos, baixas e saldos do tenant
+      summary: Retorna previsões, títulos, baixas, pagamentos e governança financeira do tenant
       responses:
         '200': { description: Workspace financeiro calculado a partir dos registros oficiais }
+  /v1/finance/purchase-cost-components:
+    post:
+      summary: Registra um componente explícito da composição financeira da compra
+      description: >-
+        Exige FINANCE_EDIT. O componente pode aumentar, reduzir ou apenas documentar o valor
+        a pagar; nenhuma taxa ou desconto é inferido pelo sistema.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreatePurchaseCostComponent' } } }
+      responses:
+        '201': { description: Componente persistido, auditado e refletido no saldo quando aplicável }
+        '404': { description: Evento/título de compra não encontrado no tenant }
+  /v1/finance/purchase-cost-components/{componentId}/reverse:
+    post:
+      summary: Estorna um componente de compra preservando o lançamento original
+      parameters:
+        - { name: componentId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ReversalReason' } } }
+      responses:
+        '201': { description: Componente e ajuste associados estornados }
+        '409': { description: Componente já estornado }
+  /v1/finance/policies:
+    post:
+      summary: Cria uma versão da política de alçada financeira
+      description: Exige FINANCE_APPROVE e desativa a versão anterior sem apagá-la.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ConfigureFinancePolicy' } } }
+      responses:
+        '201': { description: Nova política ativa e versionada }
+  /v1/finance/payment-batches:
+    post:
+      summary: Cria lote de pagamentos a partir de títulos a pagar
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreatePaymentBatch' } } }
+      responses:
+        '201': { description: Lote criado em rascunho }
+        '409': { description: Um item não é título a pagar }
+        '422': { description: Item superior ao saldo disponível }
+  /v1/finance/payment-batches/{batchId}/submit:
+    post:
+      summary: Submete o lote à política financeira vigente
+      parameters:
+        - $ref: '#/components/parameters/PaymentBatchId'
+      responses:
+        '201': { description: Lote aprovado automaticamente ou enviado para aprovação }
+        '409': { description: Política ausente ou lote fora do estado de rascunho }
+  /v1/finance/payment-batches/{batchId}/approve:
+    post:
+      summary: Aprova lote acima da alçada automática com segregação de função
+      parameters:
+        - $ref: '#/components/parameters/PaymentBatchId'
+      responses:
+        '201': { description: Lote aprovado por usuário diferente do criador }
+        '409': { description: Lote fora do estado ou violação da regra de quatro olhos }
+  /v1/finance/payment-batches/{batchId}/execute:
+    post:
+      summary: Executa atomicamente os pagamentos de um lote aprovado
+      parameters:
+        - $ref: '#/components/parameters/PaymentBatchId'
+      responses:
+        '201': { description: Pagamentos gerados e lote marcado como executado }
+        '409': { description: Lote ainda não aprovado }
+  /v1/finance/bank-accounts:
+    post:
+      summary: Cadastra conta bancária operacional do tenant
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateBankAccount' } } }
+      responses:
+        '201': { description: Conta bancária cadastrada }
+  /v1/finance/bank-statement-entries:
+    post:
+      summary: Importa manualmente uma linha de extrato para conciliação
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateBankStatementEntry' } } }
+      responses:
+        '201': { description: Linha registrada como não conciliada }
+  /v1/finance/bank-statement-entries/{entryId}/reconcile:
+    post:
+      summary: Concilia uma linha de extrato com recebimento ou pagamento de mesmo valor e direção
+      parameters:
+        - { name: entryId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ReconcileBankStatementEntry' } } }
+      responses:
+        '201': { description: Linha conciliada com vínculo auditável }
+        '409': { description: Linha já conciliada }
+        '422': { description: Valor ou direção incompatível }
   /v1/finance/titles:
     post:
       summary: Emite título a receber para uma previsão financeira pronta
@@ -487,6 +581,19 @@ paths:
       responses:
         '201': { description: Documento recebido para conferência }
         '409': { description: Documento, expedição ou chave já registrada }
+  /v1/fiscal/purchase-documents:
+    post:
+      summary: Registra NF-e de entrada e prepara o título a pagar da compra
+      description: >-
+        Vincula a nota ao recebimento aceito e confere o valor contra peso aceito e preço do
+        cenário vigente, sem inferir tolerância, desconto ou tributo.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreatePurchaseFiscalDocument' } } }
+      responses:
+        '201': { description: Documento recebido com valor esperado e evento financeiro de compra }
+        '409': { description: Recebimento já vinculado ou documento duplicado }
+        '422': { description: Recebimento não aceito ou valor divergente }
   /v1/fiscal/documents/{documentId}:
     patch:
       summary: Corrige documento e o devolve para conferência
@@ -561,6 +668,11 @@ components:
   parameters:
     OfferId:
       name: offerId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    PaymentBatchId:
+      name: batchId
       in: path
       required: true
       schema: { type: string, format: uuid }
@@ -699,6 +811,85 @@ components:
         paidAt: { type: string, format: date-time }
         bankReference: { type: string, minLength: 1, maxLength: 80 }
         notes: { type: [string, 'null'], maxLength: 1000 }
+    ReversalReason:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 3, maxLength: 500 }
+    CreatePurchaseCostComponent:
+      type: object
+      additionalProperties: false
+      required: [financialEventId, componentType, payableImpact, amount, description, externalReference]
+      properties:
+        financialEventId: { type: string, format: uuid }
+        componentType: { type: string, enum: [QUALITY_DISCOUNT, FREIGHT, STORAGE, TAX_WITHHOLDING, OTHER] }
+        payableImpact: { type: string, enum: [REDUCE_PAYABLE, INCREASE_PAYABLE, MEMO_ONLY] }
+        amount: { type: string, pattern: '^\d+(?:\.\d{1,2})?$' }
+        description: { type: string, minLength: 3, maxLength: 500 }
+        externalReference: { type: [string, 'null'], minLength: 1, maxLength: 80 }
+    ConfigureFinancePolicy:
+      type: object
+      additionalProperties: false
+      required: [paymentApprovalThreshold]
+      properties:
+        paymentApprovalThreshold: { type: string, pattern: '^\d+(?:\.\d{1,2})?$' }
+    CreatePaymentBatch:
+      type: object
+      additionalProperties: false
+      required: [reference, scheduledOn, items]
+      properties:
+        reference: { type: string, minLength: 3, maxLength: 40 }
+        scheduledOn: { type: string, format: date }
+        items:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items:
+            type: object
+            additionalProperties: false
+            required: [titleId, amount]
+            properties:
+              titleId: { type: string, format: uuid }
+              amount: { type: string, pattern: '^\d+(?:\.\d{1,2})?$' }
+    CreateBankAccount:
+      type: object
+      additionalProperties: false
+      required: [code, name]
+      properties:
+        code: { type: string, pattern: '^[A-Z0-9][A-Z0-9_-]{1,31}$' }
+        name: { type: string, minLength: 3, maxLength: 120 }
+    CreateBankStatementEntry:
+      type: object
+      additionalProperties: false
+      required: [bankAccountId, occurredAt, direction, amount, bankReference, description]
+      properties:
+        bankAccountId: { type: string, format: uuid }
+        occurredAt: { type: string, format: date-time }
+        direction: { type: string, enum: [CREDIT, DEBIT] }
+        amount: { type: string, pattern: '^\d+(?:\.\d{1,2})?$' }
+        bankReference: { type: string, minLength: 1, maxLength: 80 }
+        description: { type: [string, 'null'], minLength: 1, maxLength: 500 }
+    ReconcileBankStatementEntry:
+      type: object
+      additionalProperties: false
+      required: [matchedType, matchedId]
+      properties:
+        matchedType: { type: string, enum: [SETTLEMENT, PAYMENT] }
+        matchedId: { type: string, format: uuid }
+    CreatePurchaseFiscalDocument:
+      type: object
+      additionalProperties: false
+      required: [loadReceiptId, documentNumber, accessKey, issuedAt, totalAmount, dueDate, titleNumber, validationNotes]
+      properties:
+        loadReceiptId: { type: string, format: uuid }
+        documentNumber: { type: string, minLength: 1, maxLength: 40 }
+        accessKey: { type: [string, 'null'], pattern: '^\d{44}$' }
+        issuedAt: { type: string, format: date-time }
+        totalAmount: { type: string, pattern: '^\d+(?:\.\d{1,2})?$' }
+        dueDate: { type: string, format: date }
+        titleNumber: { type: string, minLength: 3, maxLength: 40 }
+        validationNotes: { type: [string, 'null'], minLength: 3, maxLength: 1000 }
     ConfigureRiskPolicy:
       type: object
       additionalProperties: false
@@ -737,10 +928,11 @@ components:
     FiscalConfigurationInput:
       type: object
       additionalProperties: false
-      required: [establishmentId, name, commodity, destinationUf, cfop, emissionStrategy, technicalResponsible, effectiveFrom, effectiveTo, roundingMode, roundingScale, taxComponents]
+      required: [establishmentId, name, operationType, commodity, destinationUf, cfop, emissionStrategy, technicalResponsible, effectiveFrom, effectiveTo, roundingMode, roundingScale, taxComponents]
       properties:
         establishmentId: { type: [string, 'null'], format: uuid }
         name: { type: string, minLength: 3, maxLength: 120 }
+        operationType: { type: string, enum: [SALE_DISPATCH, PURCHASE_RECEIPT] }
         commodity: { type: [string, 'null'], minLength: 2, maxLength: 40 }
         destinationUf: { type: [string, 'null'], pattern: '^[A-Z]{2}$' }
         cfop: { type: [string, 'null'], pattern: '^\d{4}$' }
@@ -780,7 +972,7 @@ components:
       properties:
         requestKey: { type: string, format: uuid }
         establishmentId: { type: string, format: uuid }
-        operationType: { const: SALE_DISPATCH }
+        operationType: { type: string, enum: [SALE_DISPATCH, PURCHASE_RECEIPT] }
         commodity: { type: string, minLength: 2, maxLength: 40 }
         destinationUf: { type: string, pattern: '^[A-Z]{2}$' }
         occurredOn: { type: string, format: date }
