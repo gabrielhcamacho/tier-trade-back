@@ -38,6 +38,7 @@ describe('commercial foundation migration', () => {
       '20261005002533_purchase_fiscal_payables.sql',
       '20261005003926_cover_purchase_operation_foreign_keys.sql',
       '20261005004718_preserve_outbound_fiscal_source_integrity.sql',
+      '20261005010100_grant_purchase_finance_runtime.sql',
     ]) {
       const migration = await readFile(new URL(`../../supabase/migrations/${migrationName}`, import.meta.url), 'utf8');
       await db.exec(migration);
@@ -111,6 +112,10 @@ describe('commercial foundation migration', () => {
     const visibleSalesVersions = await db.query<{ count: number }>('SELECT count(*)::int AS count FROM app.sales_contract_versions');
     expect(visibleSalesVersions.rows).toEqual([{ count: 0 }]);
     await db.exec('RESET ROLE');
+    const runtimePrivileges = await db.query<{ can_update: boolean }>(
+      "SELECT has_table_privilege('tier_trade_runtime','app.financial_events','UPDATE') AS can_update",
+    );
+    expect(runtimePrivileges.rows).toEqual([{ can_update: true }]);
     await db.close();
   });
 });

@@ -46,6 +46,7 @@ describe.runIf(Boolean(databaseUrl))('financial receivables', () => {
       '20261005002533_purchase_fiscal_payables.sql',
       '20261005003926_cover_purchase_operation_foreign_keys.sql',
       '20261005004718_preserve_outbound_fiscal_source_integrity.sql',
+      '20261005010100_grant_purchase_finance_runtime.sql',
     ];
     for (const migration of migrations) {
       await setup.query(await readFile(new URL(`../../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
