@@ -4,7 +4,8 @@ import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { DatabasePlatformPort } from '../database/database.js';
 import {
-  FinancialProjectionPort, type ApplyFiscalObligationInput, type ProjectSalesDispatchInput,
+  FinancialProjectionPort, type ApplyFiscalObligationInput, type IssuePurchasePayableInput,
+  type ProjectPurchaseReceiptInput, type ProjectSalesDispatchInput,
 } from './finance.port.js';
 import type {
   CreateTitleInput, PayTitleInput, ReverseSettlementInput, SettleTitleInput,
@@ -16,6 +17,9 @@ type FinancialEventRow = {
   direction: 'INFLOW' | 'OUTFLOW';
   source_id: string;
   sales_contract_id: string | null;
+  purchase_contract_id: string | null;
+  load_id: string | null;
+  load_receipt_id: string | null;
   contract_reference: string | null;
   counterparty_id: string | null;
   counterparty_name: string | null;
@@ -46,9 +50,10 @@ type FinancialEventRow = {
 type PaymentRow = {
   id: string;
   title_id: string;
-  fiscal_obligation_id: string;
+  fiscal_obligation_id: string | null;
+  purchase_receipt_id: string | null;
   title_number: string;
-  authority_name: string;
+  beneficiary_name: string;
   amount: string;
   paid_at: Date;
   bank_reference: string;
@@ -82,7 +87,9 @@ export class FinanceService extends FinancialProjectionPort {
         'SELECT legal_name,is_demo,demo_seed_version FROM app.tenants WHERE id=$1', [tenantId]);
       const events = await client.query<FinancialEventRow>(
         `SELECT fe.id,fe.event_type,fe.direction,fe.source_id,fe.sales_contract_id,
-                sc.reference AS contract_reference,fe.counterparty_id,cp.legal_name AS counterparty_name,
+                fe.purchase_contract_id,fe.load_id,fe.load_receipt_id,
+                COALESCE(sc.reference,pc.id::text) AS contract_reference,
+                fe.counterparty_id,cp.legal_name AS counterparty_name,
                 fe.fiscal_authority_id AS authority_id,fa.legal_name AS authority_name,
                 d.document_reference,d.dispatched_at,
                 fe.quantity_kg::text,fe.unit_price::text,fe.raw_amount::text,fe.calculated_amount::text,
@@ -96,6 +103,8 @@ export class FinanceService extends FinancialProjectionPort {
            FROM app.financial_events fe
            LEFT JOIN app.sales_contracts sc
              ON (sc.tenant_id,sc.id)=(fe.tenant_id,fe.sales_contract_id)
+           LEFT JOIN app.contracts pc
+             ON (pc.tenant_id,pc.id)=(fe.tenant_id,fe.purchase_contract_id)
            LEFT JOIN app.counterparties cp
              ON (cp.tenant_id,cp.id)=(fe.tenant_id,fe.counterparty_id)
            LEFT JOIN app.fiscal_authorities fa
@@ -128,16 +137,22 @@ export class FinanceService extends FinancialProjectionPort {
            JOIN app.financial_titles ft ON (ft.tenant_id,ft.id)=(fs.tenant_id,fs.title_id)
           WHERE fs.tenant_id=$1 ORDER BY fs.received_at DESC,fs.id DESC`, [tenantId]);
       const payments = await client.query<PaymentRow>(
-        `SELECT p.id,p.title_id,p.fiscal_obligation_id,ft.title_number,
-                fa.legal_name AS authority_name,p.amount::text,p.paid_at,
+        `SELECT p.id,p.title_id,p.fiscal_obligation_id,p.purchase_receipt_id,ft.title_number,
+                COALESCE(fa.legal_name,cp.legal_name) AS beneficiary_name,p.amount::text,p.paid_at,
                 p.bank_reference,p.notes,p.reversed_at,p.reversal_reason
            FROM app.financial_payments p
            JOIN app.financial_titles ft
              ON (ft.tenant_id,ft.id)=(p.tenant_id,p.title_id)
-           JOIN app.fiscal_obligations fo
+           LEFT JOIN app.fiscal_obligations fo
              ON (fo.tenant_id,fo.id)=(p.tenant_id,p.fiscal_obligation_id)
-           JOIN app.fiscal_authorities fa
+           LEFT JOIN app.fiscal_authorities fa
              ON (fa.tenant_id,fa.id)=(fo.tenant_id,fo.authority_id)
+           LEFT JOIN app.load_receipts lr
+             ON (lr.tenant_id,lr.id)=(p.tenant_id,p.purchase_receipt_id)
+           LEFT JOIN app.loads l ON (l.tenant_id,l.id)=(lr.tenant_id,lr.load_id)
+           LEFT JOIN app.contracts pc ON (pc.tenant_id,pc.id)=(l.tenant_id,l.contract_id)
+           LEFT JOIN app.offers o ON (o.tenant_id,o.id)=(pc.tenant_id,pc.offer_id)
+           LEFT JOIN app.counterparties cp ON (cp.tenant_id,cp.id)=(o.tenant_id,o.counterparty_id)
           WHERE p.tenant_id=$1 ORDER BY p.paid_at DESC,p.id DESC`, [tenantId]);
 
       const projected = events.rows.filter((row) => row.direction === 'INFLOW').reduce((sum, row) =>
@@ -180,6 +195,9 @@ export class FinanceService extends FinancialProjectionPort {
           direction: row.direction,
           sourceId: row.source_id,
           salesContractId: row.sales_contract_id,
+          purchaseContractId: row.purchase_contract_id,
+          loadId: row.load_id,
+          loadReceiptId: row.load_receipt_id,
           contractReference: row.contract_reference,
           counterpartyId: row.counterparty_id,
           counterpartyName: row.counterparty_name,
@@ -225,8 +243,9 @@ export class FinanceService extends FinancialProjectionPort {
           id: row.id,
           titleId: row.title_id,
           fiscalObligationId: row.fiscal_obligation_id,
+          purchaseReceiptId: row.purchase_receipt_id,
           titleNumber: row.title_number,
-          authorityName: row.authority_name,
+          beneficiaryName: row.beneficiary_name,
           amount: row.amount,
           paidAt: row.paid_at.toISOString(),
           bankReference: row.bank_reference,
@@ -357,8 +376,9 @@ export class FinanceService extends FinancialProjectionPort {
       await this.assertCapability(client, tenantId, actorId, 'FINANCE_EDIT');
       const title = await client.query<{
         amount: string; direction: string; event_type: string; fiscal_obligation_id: string | null;
+        load_receipt_id: string | null;
       }>(
-        `SELECT ft.amount::text,fe.direction,fe.event_type,fe.fiscal_obligation_id
+        `SELECT ft.amount::text,fe.direction,fe.event_type,fe.fiscal_obligation_id,fe.load_receipt_id
            FROM app.financial_titles ft
            JOIN app.financial_events fe
              ON (fe.tenant_id,fe.id)=(ft.tenant_id,ft.financial_event_id)
@@ -368,9 +388,12 @@ export class FinanceService extends FinancialProjectionPort {
       if (title.rows[0].direction !== 'OUTFLOW') {
         throw new ConflictException({ code: 'RECEIVABLE_PAYMENT_FLOW_NOT_AVAILABLE' });
       }
-      if (title.rows[0].event_type !== 'TAX_OBLIGATION_PAYABLE'
-        || !title.rows[0].fiscal_obligation_id) {
-        throw new ConflictException({ code: 'FISCAL_PAYABLE_REQUIRED' });
+      const isTax = title.rows[0].event_type === 'TAX_OBLIGATION_PAYABLE'
+        && Boolean(title.rows[0].fiscal_obligation_id);
+      const isPurchase = title.rows[0].event_type === 'PURCHASE_RECEIPT_PAYABLE'
+        && Boolean(title.rows[0].load_receipt_id);
+      if (!isTax && !isPurchase) {
+        throw new ConflictException({ code: 'PAYABLE_SOURCE_REQUIRED' });
       }
       const paidResult = await client.query<{ paid: string }>(
         `SELECT COALESCE(sum(amount) FILTER (WHERE reversed_at IS NULL),0)::text AS paid
@@ -386,9 +409,11 @@ export class FinanceService extends FinancialProjectionPort {
       try {
         await client.query(
           `INSERT INTO app.financial_payments
-            (tenant_id,id,title_id,fiscal_obligation_id,amount,paid_at,bank_reference,notes,created_by)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-          [tenantId, id, titleId, title.rows[0].fiscal_obligation_id, amount.toFixed(2),
+            (tenant_id,id,title_id,fiscal_obligation_id,purchase_receipt_id,
+             amount,paid_at,bank_reference,notes,created_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+          [tenantId, id, titleId, title.rows[0].fiscal_obligation_id,
+            title.rows[0].load_receipt_id, amount.toFixed(2),
             input.paidAt, input.bankReference, input.notes, actorId]);
       } catch (error) {
         if (isUniqueViolation(error)) {
@@ -400,12 +425,16 @@ export class FinanceService extends FinancialProjectionPort {
       const status = outstanding.isZero() ? 'SETTLED' : 'PARTIALLY_SETTLED';
       await client.query('UPDATE app.financial_titles SET status=$3 WHERE tenant_id=$1 AND id=$2',
         [tenantId, titleId, status]);
-      await client.query('UPDATE app.fiscal_obligations SET status=$3 WHERE tenant_id=$1 AND id=$2',
-        [tenantId, title.rows[0].fiscal_obligation_id, status]);
+      if (title.rows[0].fiscal_obligation_id) {
+        await client.query('UPDATE app.fiscal_obligations SET status=$3 WHERE tenant_id=$1 AND id=$2',
+          [tenantId, title.rows[0].fiscal_obligation_id, status]);
+      }
       await this.record(client, tenantId, actorId, 'finance.payment_recorded', 'financial_payment', id,
         { titleId, fiscalObligationId: title.rows[0].fiscal_obligation_id,
+          purchaseReceiptId: title.rows[0].load_receipt_id,
           ...input, amount: amount.toFixed(2) });
       return { id, titleId, fiscalObligationId: title.rows[0].fiscal_obligation_id,
+        purchaseReceiptId: title.rows[0].load_receipt_id,
         amount: amount.toFixed(2), outstandingAmount: outstanding.toFixed(2), status };
     });
   }
@@ -415,13 +444,15 @@ export class FinanceService extends FinancialProjectionPort {
     return this.db.transaction(tenantId, async (client) => {
       await this.assertCapability(client, tenantId, actorId, 'FINANCE_EDIT');
       const payment = await client.query<{
-        title_id: string; fiscal_obligation_id: string; reversed_at: Date | null;
+        title_id: string; fiscal_obligation_id: string | null; purchase_receipt_id: string | null;
+        reversed_at: Date | null;
       }>(
-        `SELECT title_id,fiscal_obligation_id,reversed_at FROM app.financial_payments
+        `SELECT title_id,fiscal_obligation_id,purchase_receipt_id,reversed_at FROM app.financial_payments
           WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenantId, paymentId]);
       if (!payment.rows[0]) throw new NotFoundException({ code: 'FINANCIAL_PAYMENT_NOT_FOUND' });
       if (payment.rows[0].reversed_at) throw new ConflictException({ code: 'PAYMENT_ALREADY_REVERSED' });
-      const { title_id: titleId, fiscal_obligation_id: obligationId } = payment.rows[0];
+      const { title_id: titleId, fiscal_obligation_id: obligationId,
+        purchase_receipt_id: purchaseReceiptId } = payment.rows[0];
       await client.query('SELECT 1 FROM app.financial_titles WHERE tenant_id=$1 AND id=$2 FOR UPDATE',
         [tenantId, titleId]);
       await client.query(
@@ -440,11 +471,14 @@ export class FinanceService extends FinancialProjectionPort {
         ? 'OPEN' : paid.equals(balance.rows[0]!.amount) ? 'SETTLED' : 'PARTIALLY_SETTLED';
       await client.query('UPDATE app.financial_titles SET status=$3 WHERE tenant_id=$1 AND id=$2',
         [tenantId, titleId, status]);
-      await client.query('UPDATE app.fiscal_obligations SET status=$3 WHERE tenant_id=$1 AND id=$2',
-        [tenantId, obligationId, status]);
+      if (obligationId) {
+        await client.query('UPDATE app.fiscal_obligations SET status=$3 WHERE tenant_id=$1 AND id=$2',
+          [tenantId, obligationId, status]);
+      }
       await this.record(client, tenantId, actorId, 'finance.payment_reversed', 'financial_payment',
-        paymentId, { titleId, fiscalObligationId: obligationId, reason: input.reason });
-      return { id: paymentId, titleId, fiscalObligationId: obligationId, status, reversed: true };
+        paymentId, { titleId, fiscalObligationId: obligationId, purchaseReceiptId, reason: input.reason });
+      return { id: paymentId, titleId, fiscalObligationId: obligationId,
+        purchaseReceiptId, status, reversed: true };
     });
   }
 
@@ -493,6 +527,97 @@ export class FinanceService extends FinancialProjectionPort {
     await this.record(client, input.tenantId, input.actorId, 'finance.forecast_projected',
       'financial_event', id, memory);
     return { financialEventId: id, calculationStatus };
+  }
+
+  async projectPurchaseReceipt(client: PoolClient, input: ProjectPurchaseReceiptInput) {
+    const existing = await client.query<{ id: string; calculation_status: string; calculated_amount: string | null }>(
+      `SELECT id,calculation_status,calculated_amount::text
+         FROM app.financial_events
+        WHERE tenant_id=$1 AND event_type='PURCHASE_RECEIPT_PAYABLE'
+          AND source_type='LOAD_RECEIPT' AND source_id=$2`, [input.tenantId, input.receiptId]);
+    if (existing.rows[0]) return {
+      financialEventId: existing.rows[0].id,
+      calculationStatus: existing.rows[0].calculation_status,
+      expectedAmount: existing.rows[0].calculated_amount,
+    };
+    const source = await client.query<{
+      accepted_weight_kg: string; purchase_price_per_sc: string; purchase_contract_id: string;
+      load_id: string; counterparty_id: string; received_on: string;
+    }>(
+      `SELECT lr.accepted_weight_kg::text,ps.purchase_price_per_sc::text,
+              c.id AS purchase_contract_id,l.id AS load_id,o.counterparty_id,
+              (lr.received_at AT TIME ZONE t.timezone)::date::text AS received_on
+         FROM app.load_receipts lr
+         JOIN app.loads l ON (l.tenant_id,l.id)=(lr.tenant_id,lr.load_id)
+         JOIN app.contracts c ON (c.tenant_id,c.id)=(l.tenant_id,l.contract_id)
+         JOIN app.offers o ON (o.tenant_id,o.id)=(c.tenant_id,c.offer_id)
+         JOIN app.pricing_scenarios ps ON (ps.tenant_id,ps.offer_id)=(o.tenant_id,o.id)
+         JOIN app.tenants t ON t.id=lr.tenant_id
+        WHERE lr.tenant_id=$1 AND lr.id=$2 AND lr.is_current=true
+          AND lr.quality_decision='ACCEPTED' AND lr.accepted_weight_kg IS NOT NULL`,
+      [input.tenantId, input.receiptId]);
+    if (!source.rows[0]) throw new ConflictException({ code: 'ACCEPTED_CURRENT_RECEIPT_REQUIRED' });
+    const row = source.rows[0];
+    const quantitySc = new Decimal(row.accepted_weight_kg).div(60);
+    const raw = quantitySc.times(row.purchase_price_per_sc);
+    const exactCents = raw.decimalPlaces() <= 2;
+    const calculationStatus = exactCents ? 'READY' : 'PENDING_ROUNDING_POLICY';
+    const id = randomUUID();
+    const memory = {
+      acceptedWeightKg: new Decimal(row.accepted_weight_kg).toFixed(3),
+      conversion: 'acceptedWeightKg ÷ 60 kg/sc', quantitySc: quantitySc.toFixed(9),
+      purchasePricePerSc: new Decimal(row.purchase_price_per_sc).toFixed(6),
+      operation: '(acceptedWeightKg ÷ 60) × purchasePricePerSc', rawAmount: raw.toFixed(9),
+      currency: 'BRL', rounding: exactCents ? 'NOT_REQUIRED_EXACT_CENTS' : 'PENDING_TENANT_POLICY',
+    };
+    await client.query(
+      `INSERT INTO app.financial_events
+        (tenant_id,id,event_type,source_type,source_id,purchase_contract_id,load_id,load_receipt_id,
+         counterparty_id,direction,currency,quantity_kg,unit_price,raw_amount,calculated_amount,
+         calculation_status,expected_on,formula_code,formula_version,calculation_memory,created_by)
+       VALUES ($1,$2,'PURCHASE_RECEIPT_PAYABLE','LOAD_RECEIPT',$3,$4,$5,$3,$6,'OUTFLOW','BRL',
+         $7,$8,$9,$10,$11,$12,'PURCHASE_RECEIPT_GROSS',1,$13::jsonb,$14)`,
+      [input.tenantId, id, input.receiptId, row.purchase_contract_id, row.load_id,
+        row.counterparty_id, new Decimal(row.accepted_weight_kg).toFixed(3),
+        new Decimal(row.purchase_price_per_sc).toFixed(6), raw.toFixed(9),
+        exactCents ? raw.toFixed(2) : null, calculationStatus, row.received_on,
+        JSON.stringify(memory), input.actorId]);
+    await this.record(client, input.tenantId, input.actorId, 'finance.purchase_payable_projected',
+      'financial_event', id, memory);
+    return { financialEventId: id, calculationStatus,
+      expectedAmount: exactCents ? raw.toFixed(2) : null };
+  }
+
+  async issuePurchasePayable(client: PoolClient, input: IssuePurchasePayableInput) {
+    const event = await client.query<{ calculated_amount: string | null; calculation_status: string }>(
+      `SELECT calculated_amount::text,calculation_status FROM app.financial_events
+        WHERE tenant_id=$1 AND id=$2 AND event_type='PURCHASE_RECEIPT_PAYABLE' FOR UPDATE`,
+      [input.tenantId, input.financialEventId]);
+    if (!event.rows[0]) throw new NotFoundException({ code: 'PURCHASE_FINANCIAL_EVENT_NOT_FOUND' });
+    if (event.rows[0].calculation_status !== 'READY' || !event.rows[0].calculated_amount) {
+      throw new ConflictException({ code: 'ROUNDING_POLICY_REQUIRED' });
+    }
+    const existing = await client.query<{ id: string; amount: string }>(
+      'SELECT id,amount::text FROM app.financial_titles WHERE tenant_id=$1 AND financial_event_id=$2',
+      [input.tenantId, input.financialEventId]);
+    if (existing.rows[0]) return { titleId: existing.rows[0].id, amount: existing.rows[0].amount };
+    const titleId = randomUUID();
+    try {
+      await client.query(
+        `INSERT INTO app.financial_titles
+          (tenant_id,id,financial_event_id,title_number,document_reference,due_date,amount,
+           fiscal_document_id,issued_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [input.tenantId, titleId, input.financialEventId, input.titleNumber,
+          input.documentReference, input.dueDate, event.rows[0].calculated_amount,
+          input.fiscalDocumentId, input.actorId]);
+    } catch (error) {
+      if (isUniqueViolation(error)) throw new ConflictException({ code: 'PURCHASE_PAYABLE_ALREADY_EXISTS' });
+      throw error;
+    }
+    await this.record(client, input.tenantId, input.actorId, 'finance.purchase_title_issued',
+      'financial_title', titleId, input);
+    return { titleId, amount: event.rows[0].calculated_amount };
   }
 
   async applyFiscalObligation(client: PoolClient, input: ApplyFiscalObligationInput) {

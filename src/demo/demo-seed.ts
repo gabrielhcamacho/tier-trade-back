@@ -430,10 +430,10 @@ async function seedOperationalData(client: PoolClient, input: ResetDemoTenantInp
   );
   await client.query(
     `INSERT INTO app.fiscal_documents
-      (tenant_id,id,document_type,direction,source_type,source_id,sales_contract_id,
+      (tenant_id,id,document_type,direction,source_type,source_id,inventory_dispatch_id,sales_contract_id,
        financial_event_id,document_number,access_key,issued_at,total_amount,status,
        validation_notes,created_by,updated_by,created_at,updated_at)
-     VALUES ($1,$2,'NFE','OUTBOUND','INVENTORY_DISPATCH',$3,$4,$5,'NFE-DEMO-0001',
+     VALUES ($1,$2,'NFE','OUTBOUND','INVENTORY_DISPATCH',$3,$3,$4,$5,'NFE-DEMO-0001',
        '99000000000000000000000000000000000000000001','2026-10-01T16:10:00Z',11360.00,
        'RECEIVED','Documento fiscal fictício pronto para validação na demonstração.',$6,$6,
        '2026-10-01T16:15:00Z','2026-10-01T16:15:00Z')`,

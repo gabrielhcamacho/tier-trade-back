@@ -5,9 +5,11 @@ import { SchemaPipe } from '../common/schema.pipe.js';
 import {
   acceptFiscalCalculationSchema, createFiscalAuthoritySchema, createFiscalCalculationSchema,
   createFiscalConfigurationSchema, createFiscalDocumentSchema, createFiscalEstablishmentSchema,
+  createPurchaseFiscalDocumentSchema,
   rejectFiscalDocumentSchema, updateFiscalConfigurationSchema, updateFiscalDocumentSchema,
   type AcceptFiscalCalculationInput, type CreateFiscalAuthorityInput, type CreateFiscalCalculationInput,
   type CreateFiscalConfigurationInput, type CreateFiscalDocumentInput,
+  type CreatePurchaseFiscalDocumentInput,
   type CreateFiscalEstablishmentInput, type RejectFiscalDocumentInput,
   type UpdateFiscalConfigurationInput, type UpdateFiscalDocumentInput,
 } from './fiscal.schemas.js';
@@ -86,6 +88,12 @@ export class FiscalController {
   create(@Identity() identity: RequestIdentity,
     @Body(new SchemaPipe(createFiscalDocumentSchema)) input: CreateFiscalDocumentInput) {
     return this.service.create(identity.tenantId, identity.actorId, input);
+  }
+
+  @Post('purchase-documents')
+  createPurchase(@Identity() identity: RequestIdentity,
+    @Body(new SchemaPipe(createPurchaseFiscalDocumentSchema)) input: CreatePurchaseFiscalDocumentInput) {
+    return this.service.createPurchase(identity.tenantId, identity.actorId, input);
   }
 
   @Patch('documents/:documentId')

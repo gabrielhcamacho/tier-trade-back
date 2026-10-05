@@ -7,6 +7,7 @@ import { FinancialProjectionPort } from '../finance/finance.port.js';
 import type {
   AcceptFiscalCalculationInput, CreateFiscalAuthorityInput, CreateFiscalCalculationInput,
   CreateFiscalConfigurationInput, CreateFiscalDocumentInput, CreateFiscalEstablishmentInput,
+  CreatePurchaseFiscalDocumentInput,
   RejectFiscalDocumentInput, UpdateFiscalConfigurationInput, UpdateFiscalDocumentInput,
 } from './fiscal.schemas.js';
 import { taxComponentSchema } from './fiscal.schemas.js';
@@ -63,6 +64,17 @@ type FiscalObligationRow = {
   payable_status: string | null; adjustment_id: string | null; adjusted_title_id: string | null;
 };
 
+type PurchaseFiscalDocumentRow = {
+  id: string; financial_event_id: string; purchase_contract_id: string; load_id: string;
+  load_receipt_id: string; counterparty_name: string; document_number: string;
+  access_key: string | null; issued_at: Date; total_amount: string; expected_amount: string | null;
+  due_date: string; payable_title_number: string; status: string; validation_notes: string | null;
+  rejection_reason: string | null; updated_at: Date; validated_at: Date | null;
+  inbound_invoice_series: string | null; scale_ticket_number: string | null;
+  accepted_weight_kg: string; commodity: string; title_id: string | null;
+  title_status: string | null; paid_amount: string; outstanding_amount: string | null;
+};
+
 @Injectable()
 export class FiscalService {
   constructor(
@@ -114,6 +126,51 @@ export class FiscalService {
              ON (fd.tenant_id,fd.financial_event_id)=(fe.tenant_id,fe.id)
           WHERE fe.tenant_id=$1 AND fd.id IS NULL
           ORDER BY fe.created_at DESC`, [tenantId]);
+      const purchaseDocuments = await client.query<PurchaseFiscalDocumentRow>(
+        `SELECT fd.id,fd.financial_event_id,fd.purchase_contract_id,fd.load_id,fd.load_receipt_id,
+                cp.legal_name AS counterparty_name,fd.document_number,fd.access_key,fd.issued_at,
+                fd.total_amount::text,fe.calculated_amount::text AS expected_amount,
+                fd.due_date::text,fd.payable_title_number,fd.status,fd.validation_notes,
+                fd.rejection_reason,fd.updated_at,fd.validated_at,lr.inbound_invoice_series,
+                lr.scale_ticket_number,lr.accepted_weight_kg::text,o.commodity,
+                ft.id AS title_id,ft.status AS title_status,
+                COALESCE(p.paid,0)::text AS paid_amount,
+                CASE WHEN ft.id IS NULL THEN NULL ELSE GREATEST(ft.amount-COALESCE(p.paid,0),0)::text END AS outstanding_amount
+           FROM app.fiscal_documents fd
+           JOIN app.financial_events fe ON (fe.tenant_id,fe.id)=(fd.tenant_id,fd.financial_event_id)
+           JOIN app.load_receipts lr ON (lr.tenant_id,lr.id)=(fd.tenant_id,fd.load_receipt_id)
+           JOIN app.loads l ON (l.tenant_id,l.id)=(fd.tenant_id,fd.load_id)
+           JOIN app.contracts c ON (c.tenant_id,c.id)=(fd.tenant_id,fd.purchase_contract_id)
+           JOIN app.offers o ON (o.tenant_id,o.id)=(c.tenant_id,c.offer_id)
+           JOIN app.counterparties cp ON (cp.tenant_id,cp.id)=(o.tenant_id,o.counterparty_id)
+           LEFT JOIN app.financial_titles ft ON (ft.tenant_id,ft.financial_event_id)=(fd.tenant_id,fd.financial_event_id)
+           LEFT JOIN LATERAL (
+             SELECT COALESCE(sum(fp.amount) FILTER (WHERE fp.reversed_at IS NULL),0)::numeric(20,2) AS paid
+               FROM app.financial_payments fp WHERE fp.tenant_id=ft.tenant_id AND fp.title_id=ft.id
+           ) p ON true
+          WHERE fd.tenant_id=$1 AND fd.direction='INBOUND'
+          ORDER BY fd.issued_at DESC,fd.id DESC`, [tenantId]);
+      const eligiblePurchaseReceipts = await client.query<{
+        id: string; load_id: string; contract_id: string; counterparty_name: string;
+        commodity: string; invoice_number: string; invoice_series: string | null;
+        access_key: string | null; accepted_weight_kg: string; received_at: Date;
+        purchase_price_per_sc: string;
+      }>(
+        `SELECT lr.id,l.id AS load_id,c.id AS contract_id,cp.legal_name AS counterparty_name,
+                o.commodity,lr.inbound_invoice_number AS invoice_number,
+                lr.inbound_invoice_series AS invoice_series,lr.inbound_invoice_access_key AS access_key,
+                lr.accepted_weight_kg::text,lr.received_at,ps.purchase_price_per_sc::text
+           FROM app.load_receipts lr
+           JOIN app.loads l ON (l.tenant_id,l.id)=(lr.tenant_id,lr.load_id)
+           JOIN app.contracts c ON (c.tenant_id,c.id)=(l.tenant_id,l.contract_id)
+           JOIN app.offers o ON (o.tenant_id,o.id)=(c.tenant_id,c.offer_id)
+           JOIN app.counterparties cp ON (cp.tenant_id,cp.id)=(o.tenant_id,o.counterparty_id)
+           JOIN app.pricing_scenarios ps ON (ps.tenant_id,ps.offer_id)=(o.tenant_id,o.id)
+           LEFT JOIN app.fiscal_documents fd
+             ON (fd.tenant_id,fd.load_receipt_id)=(lr.tenant_id,lr.id) AND fd.direction='INBOUND'
+          WHERE lr.tenant_id=$1 AND lr.is_current=true AND lr.quality_decision='ACCEPTED'
+            AND lr.accepted_weight_kg IS NOT NULL AND lr.inbound_invoice_number IS NOT NULL
+            AND fd.id IS NULL ORDER BY lr.received_at DESC`, [tenantId]);
       const establishments = await client.query<FiscalEstablishmentRow>(
         `SELECT id,legal_name,tax_id,state_registration,uf,tax_regime,active,updated_at
            FROM app.fiscal_establishments WHERE tenant_id=$1
@@ -210,6 +267,31 @@ export class FiscalService {
           taxPayables: obligations.rows.filter((obligation) => obligation.payable_title_id !== null).length,
         },
         documents: mapped,
+        purchaseDocuments: purchaseDocuments.rows.map((row) => ({
+          id: row.id, financialEventId: row.financial_event_id,
+          purchaseContractId: row.purchase_contract_id, loadId: row.load_id,
+          loadReceiptId: row.load_receipt_id, counterpartyName: row.counterparty_name,
+          commodity: row.commodity, documentNumber: row.document_number,
+          invoiceSeries: row.inbound_invoice_series, accessKey: row.access_key,
+          issuedAt: row.issued_at.toISOString(), totalAmount: row.total_amount,
+          expectedAmount: row.expected_amount,
+          differenceAmount: row.expected_amount
+            ? new Decimal(row.total_amount).minus(row.expected_amount).toFixed(2) : null,
+          dueDate: row.due_date, titleNumber: row.payable_title_number,
+          scaleTicketNumber: row.scale_ticket_number, acceptedWeightKg: row.accepted_weight_kg,
+          status: row.status, validationNotes: row.validation_notes,
+          rejectionReason: row.rejection_reason, updatedAt: row.updated_at.toISOString(),
+          validatedAt: row.validated_at?.toISOString() ?? null,
+          payable: row.title_id ? { id: row.title_id, status: row.title_status,
+            paidAmount: row.paid_amount, outstandingAmount: row.outstanding_amount } : null,
+        })),
+        eligiblePurchaseReceipts: eligiblePurchaseReceipts.rows.map((row) => ({
+          id: row.id, loadId: row.load_id, contractId: row.contract_id,
+          counterpartyName: row.counterparty_name, commodity: row.commodity,
+          invoiceNumber: row.invoice_number, invoiceSeries: row.invoice_series,
+          accessKey: row.access_key, acceptedWeightKg: row.accepted_weight_kg,
+          purchasePricePerSc: row.purchase_price_per_sc, receivedAt: row.received_at.toISOString(),
+        })),
         establishments: establishments.rows.map((row) => ({
           id: row.id, legalName: row.legal_name, taxId: row.tax_id,
           stateRegistration: row.state_registration, uf: row.uf, taxRegime: row.tax_regime,
@@ -693,10 +775,10 @@ export class FiscalService {
       try {
         await client.query(
           `INSERT INTO app.fiscal_documents
-            (tenant_id,id,document_type,direction,source_type,source_id,sales_contract_id,
+            (tenant_id,id,document_type,direction,source_type,source_id,inventory_dispatch_id,sales_contract_id,
              financial_event_id,document_number,access_key,issued_at,total_amount,
              validation_notes,created_by,updated_by)
-           VALUES ($1,$2,'NFE','OUTBOUND','INVENTORY_DISPATCH',$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)`,
+           VALUES ($1,$2,'NFE','OUTBOUND','INVENTORY_DISPATCH',$3,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)`,
           [tenantId, id, source.source_id, source.sales_contract_id, input.financialEventId,
             input.documentNumber, input.accessKey, input.issuedAt, input.totalAmount,
             input.validationNotes, actorId]);
@@ -710,10 +792,57 @@ export class FiscalService {
     });
   }
 
+  createPurchase(tenantId: string, actorId: string, input: CreatePurchaseFiscalDocumentInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'FISCAL_EDIT');
+      await this.assertCapability(client, tenantId, actorId, 'FINANCE_EDIT');
+      const receipt = await client.query<{
+        load_id: string; contract_id: string; inbound_invoice_number: string | null;
+        inbound_invoice_access_key: string | null;
+      }>(
+        `SELECT lr.load_id,l.contract_id,lr.inbound_invoice_number,lr.inbound_invoice_access_key
+           FROM app.load_receipts lr
+           JOIN app.loads l ON (l.tenant_id,l.id)=(lr.tenant_id,lr.load_id)
+          WHERE lr.tenant_id=$1 AND lr.id=$2 AND lr.is_current=true
+            AND lr.quality_decision='ACCEPTED' AND lr.accepted_weight_kg IS NOT NULL`,
+        [tenantId, input.loadReceiptId]);
+      if (!receipt.rows[0]) throw new ConflictException({ code: 'ACCEPTED_CURRENT_RECEIPT_REQUIRED' });
+      const projection = await this.finance.projectPurchaseReceipt(client, {
+        tenantId, actorId, receiptId: input.loadReceiptId,
+      });
+      const id = randomUUID();
+      try {
+        await client.query(
+          `INSERT INTO app.fiscal_documents
+            (tenant_id,id,document_type,direction,source_type,source_id,purchase_contract_id,
+             load_id,load_receipt_id,financial_event_id,document_number,access_key,issued_at,
+             total_amount,due_date,payable_title_number,validation_notes,created_by,updated_by)
+           VALUES ($1,$2,'NFE','INBOUND','LOAD_RECEIPT',$3,$4,$5,$3,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14)`,
+          [tenantId, id, input.loadReceiptId, receipt.rows[0].contract_id, receipt.rows[0].load_id,
+            projection.financialEventId, input.documentNumber,
+            input.accessKey ?? receipt.rows[0].inbound_invoice_access_key,
+            input.issuedAt, input.totalAmount, input.dueDate, input.titleNumber,
+            input.validationNotes, actorId]);
+      } catch (error) {
+        if (isUniqueViolation(error)) throw new ConflictException({ code: 'FISCAL_DOCUMENT_ALREADY_EXISTS' });
+        throw error;
+      }
+      await this.record(client, tenantId, actorId, 'fiscal.purchase_document_received',
+        'fiscal_document', id, { loadReceiptId: input.loadReceiptId,
+          financialEventId: projection.financialEventId, documentNumber: input.documentNumber,
+          expectedAmount: projection.expectedAmount });
+      return { id, status: 'RECEIVED', financialEventId: projection.financialEventId,
+        calculationStatus: projection.calculationStatus, expectedAmount: projection.expectedAmount };
+    });
+  }
+
   update(tenantId: string, actorId: string, documentId: string, input: UpdateFiscalDocumentInput) {
     return this.db.transaction(tenantId, async (client) => {
       await this.assertCapability(client, tenantId, actorId, 'FISCAL_EDIT');
       const existing = await this.lockDocument(client, tenantId, documentId);
+      if (existing.direction === 'INBOUND' && existing.status === 'VALIDATED') {
+        throw new ConflictException({ code: 'VALIDATED_FISCAL_DOCUMENT_IMMUTABLE' });
+      }
       try {
         await client.query(
           `UPDATE app.fiscal_documents
@@ -757,20 +886,34 @@ export class FiscalService {
             SET status='VALIDATED',rejection_reason=NULL,validated_by=$3,validated_at=now(),
                 updated_by=$3,updated_at=now()
           WHERE tenant_id=$1 AND id=$2`, [tenantId, documentId, actorId]);
-      const linked = await client.query<{ id: string }>(
-        `UPDATE app.financial_titles SET fiscal_document_id=$3
-          WHERE tenant_id=$1 AND financial_event_id=$2 RETURNING id`,
-        [tenantId, document.financial_event_id, documentId]);
+      let linkedTitleId: string | null = null;
+      if (document.direction === 'INBOUND') {
+        const issued = await this.finance.issuePurchasePayable(client, {
+          tenantId, actorId, financialEventId: document.financial_event_id,
+          fiscalDocumentId: documentId, titleNumber: document.payable_title_number!,
+          documentReference: document.document_number, dueDate: document.due_date!,
+        });
+        linkedTitleId = issued.titleId;
+      } else {
+        const linked = await client.query<{ id: string }>(
+          `UPDATE app.financial_titles SET fiscal_document_id=$3
+            WHERE tenant_id=$1 AND financial_event_id=$2 RETURNING id`,
+          [tenantId, document.financial_event_id, documentId]);
+        linkedTitleId = linked.rows[0]?.id ?? null;
+      }
       await this.record(client, tenantId, actorId, 'fiscal.document_validated', 'fiscal_document', documentId,
-        { financialEventId: document.financial_event_id, linkedTitleId: linked.rows[0]?.id ?? null });
-      return { id: documentId, status: 'VALIDATED', linkedTitleId: linked.rows[0]?.id ?? null };
+        { financialEventId: document.financial_event_id, linkedTitleId });
+      return { id: documentId, status: 'VALIDATED', linkedTitleId };
     });
   }
 
   reject(tenantId: string, actorId: string, documentId: string, input: RejectFiscalDocumentInput) {
     return this.db.transaction(tenantId, async (client) => {
       await this.assertCapability(client, tenantId, actorId, 'FISCAL_EDIT');
-      await this.lockDocument(client, tenantId, documentId);
+      const document = await this.lockDocument(client, tenantId, documentId);
+      if (document.status === 'VALIDATED' && document.direction === 'INBOUND') {
+        throw new ConflictException({ code: 'VALIDATED_FISCAL_DOCUMENT_IMMUTABLE' });
+      }
       await client.query(
         `UPDATE app.fiscal_documents
             SET status='REJECTED',rejection_reason=$3,validated_by=$4,validated_at=now(),
@@ -928,8 +1071,11 @@ export class FiscalService {
     const result = await client.query<{
       financial_event_id: string; status: string; access_key: string | null;
       total_amount: string; calculated_amount: string | null; calculation_status: string;
+      direction: 'OUTBOUND' | 'INBOUND'; payable_title_number: string | null;
+      document_number: string; due_date: string | null;
     }>(
       `SELECT fd.financial_event_id,fd.status,fd.access_key,fd.total_amount::text,
+              fd.direction,fd.payable_title_number,fd.document_number,fd.due_date::text,
               fe.calculated_amount::text,fe.calculation_status
          FROM app.fiscal_documents fd
          JOIN app.financial_events fe

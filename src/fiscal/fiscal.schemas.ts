@@ -45,6 +45,21 @@ export const createFiscalDocumentSchema = z.object({
   validationNotes: z.string().trim().min(3).max(1000).nullable(),
 });
 
+export const createPurchaseFiscalDocumentSchema = z.object({
+  loadReceiptId: z.uuid(),
+  documentNumber: z.string().trim().min(1).max(40),
+  accessKey,
+  issuedAt: z.iso.datetime({ offset: true }),
+  totalAmount: positiveMoney,
+  dueDate: z.iso.date(),
+  titleNumber: z.string().trim().min(3).max(40),
+  validationNotes: z.string().trim().min(3).max(1000).nullable(),
+}).superRefine((document, context) => {
+  if (document.dueDate < document.issuedAt.slice(0, 10)) {
+    context.addIssue({ code: 'custom', path: ['dueDate'], message: 'O vencimento não pode anteceder a emissão.' });
+  }
+});
+
 export const updateFiscalDocumentSchema = z.object({
   documentNumber: z.string().trim().min(1).max(40),
   accessKey,
@@ -155,6 +170,7 @@ export const acceptFiscalCalculationSchema = z.object({
 });
 
 export type CreateFiscalDocumentInput = z.infer<typeof createFiscalDocumentSchema>;
+export type CreatePurchaseFiscalDocumentInput = z.infer<typeof createPurchaseFiscalDocumentSchema>;
 export type UpdateFiscalDocumentInput = z.infer<typeof updateFiscalDocumentSchema>;
 export type RejectFiscalDocumentInput = z.infer<typeof rejectFiscalDocumentSchema>;
 export type TaxComponentInput = z.infer<typeof taxComponentSchema>;

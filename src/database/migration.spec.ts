@@ -35,6 +35,9 @@ describe('commercial foundation migration', () => {
       '20261004221411_operations_receipt_document_weights.sql',
       '20261004224629_cover_sales_contract_version_recorder_fk.sql',
       '20261004234000_operations_yard_occurrences_romaneio.sql',
+      '20261005002533_purchase_fiscal_payables.sql',
+      '20261005003926_cover_purchase_operation_foreign_keys.sql',
+      '20261005004718_preserve_outbound_fiscal_source_integrity.sql',
     ]) {
       const migration = await readFile(new URL(`../../supabase/migrations/${migrationName}`, import.meta.url), 'utf8');
       await db.exec(migration);

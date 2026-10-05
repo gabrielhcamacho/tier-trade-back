@@ -6,6 +6,22 @@ export type ProjectSalesDispatchInput = {
   dispatchId: string;
 };
 
+export type ProjectPurchaseReceiptInput = {
+  tenantId: string;
+  actorId: string;
+  receiptId: string;
+};
+
+export type IssuePurchasePayableInput = {
+  tenantId: string;
+  actorId: string;
+  financialEventId: string;
+  fiscalDocumentId: string;
+  titleNumber: string;
+  documentReference: string;
+  dueDate: string;
+};
+
 export type ApplyFiscalObligationInput = {
   tenantId: string;
   actorId: string;
@@ -28,6 +44,16 @@ export abstract class FinancialProjectionPort {
     client: PoolClient,
     input: ProjectSalesDispatchInput,
   ): Promise<{ financialEventId: string; calculationStatus: string }>;
+
+  abstract projectPurchaseReceipt(
+    client: PoolClient,
+    input: ProjectPurchaseReceiptInput,
+  ): Promise<{ financialEventId: string; calculationStatus: string; expectedAmount: string | null }>;
+
+  abstract issuePurchasePayable(
+    client: PoolClient,
+    input: IssuePurchasePayableInput,
+  ): Promise<{ titleId: string; amount: string }>;
 
   abstract applyFiscalObligation(
     client: PoolClient,

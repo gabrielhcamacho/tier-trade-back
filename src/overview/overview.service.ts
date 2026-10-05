@@ -42,12 +42,32 @@ export class OverviewService {
     });
     // Each domain remains its data owner. This read model composes their public,
     // tenant-scoped workspaces; it does not write or recalculate official ledgers.
-    const [offers, contracts, finance, inventory, risk] = await Promise.all([
+    const [offers, contracts, finance, inventory, risk, operational] = await Promise.all([
       this.commercial.listOffers(tenantId, actorId),
       this.commercial.listContracts(tenantId, actorId),
       this.finance.workspace(tenantId, actorId),
       this.inventory.position(tenantId, actorId),
       this.risk.workspace(tenantId, actorId),
+      this.db.transaction(tenantId, async (client) => {
+        const result = await client.query<{
+          open_occurrences: string; critical_occurrences: string; quality_reviews: string;
+          fiscal_pending: string; fiscal_rejected: string; purchase_payables_open: string;
+        }>(`SELECT
+          (SELECT count(*) FROM app.load_occurrences WHERE tenant_id=$1 AND status='OPEN')::text AS open_occurrences,
+          (SELECT count(*) FROM app.load_occurrences WHERE tenant_id=$1 AND status='OPEN' AND severity='CRITICAL')::text AS critical_occurrences,
+          (SELECT count(*) FROM app.load_receipts WHERE tenant_id=$1 AND is_current=true AND quality_decision='REVIEW_REQUIRED')::text AS quality_reviews,
+          (SELECT count(*) FROM app.fiscal_documents WHERE tenant_id=$1 AND status='RECEIVED')::text AS fiscal_pending,
+          (SELECT count(*) FROM app.fiscal_documents WHERE tenant_id=$1 AND status='REJECTED')::text AS fiscal_rejected,
+          (SELECT count(*) FROM app.financial_titles ft JOIN app.financial_events fe
+             ON (fe.tenant_id,fe.id)=(ft.tenant_id,ft.financial_event_id)
+            WHERE ft.tenant_id=$1 AND fe.event_type='PURCHASE_RECEIPT_PAYABLE'
+              AND ft.status IN ('OPEN','PARTIALLY_SETTLED'))::text AS purchase_payables_open`, [tenantId]);
+        const row = result.rows[0]!;
+        return { openOccurrences: Number(row.open_occurrences),
+          criticalOccurrences: Number(row.critical_occurrences), qualityReviews: Number(row.quality_reviews),
+          fiscalPending: Number(row.fiscal_pending), fiscalRejected: Number(row.fiscal_rejected),
+          purchasePayablesOpen: Number(row.purchase_payables_open) };
+      }),
     ]);
     const offerItems = offers.items.filter((item) => !commodity || item.commodity === commodity);
     const contractItems = contracts.items.filter((item) => item.status === 'ACTIVE'
@@ -110,6 +130,14 @@ export class OverviewService {
       ...contractItems.filter((item) => Number(item.pending_obligations) > 0)
         .map((item) => ({ type: 'CONTRACT_OBLIGATION', sourceId: item.id, commodity: item.commodity,
           pendingCount: Number(item.pending_obligations), decisionOwner: 'COMMERCIAL_EDIT' })),
+      ...(operational.openOccurrences ? [{ type: 'OPERATION_OCCURRENCE', sourceId: tenantId,
+        pendingCount: operational.openOccurrences, criticalCount: operational.criticalOccurrences,
+        decisionOwner: 'OPERATIONS_EDIT' }] : []),
+      ...(operational.qualityReviews ? [{ type: 'QUALITY_REVIEW', sourceId: tenantId,
+        pendingCount: operational.qualityReviews, decisionOwner: 'OPERATIONS_EDIT' }] : []),
+      ...(operational.fiscalPending || operational.fiscalRejected ? [{ type: 'FISCAL_DOCUMENT_REVIEW',
+        sourceId: tenantId, pendingCount: operational.fiscalPending,
+        rejectedCount: operational.fiscalRejected, decisionOwner: 'FISCAL_EDIT' }] : []),
     ];
 
     return {
@@ -137,6 +165,12 @@ export class OverviewService {
         payableAmount: finance.summary.payableAmount,
         pendingApprovalCount: approvals.length,
         pendingObligationCount: obligations,
+        openOccurrenceCount: operational.openOccurrences,
+        criticalOccurrenceCount: operational.criticalOccurrences,
+        qualityReviewCount: operational.qualityReviews,
+        fiscalPendingCount: operational.fiscalPending,
+        fiscalRejectedCount: operational.fiscalRejected,
+        purchasePayableOpenCount: operational.purchasePayablesOpen,
       },
       charts: { marginComponents, dueDates, byCommodity },
       exceptions,
@@ -146,6 +180,7 @@ export class OverviewService {
         { code: 'AI_INSIGHTS', reason: 'Motor de evidências e confiança ainda não habilitado.' },
         { code: 'ROLE_AND_UNIT_SCOPE', reason: 'Papéis, equipes e unidades operacionais ainda não modelados.' },
       ],
+      operational,
       sources: { offers, contracts, finance, inventory, risk },
     };
   }

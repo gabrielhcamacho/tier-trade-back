@@ -1,5 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
+import Decimal from 'decimal.js';
 import { readFile } from 'node:fs/promises';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -42,6 +43,9 @@ describe.runIf(Boolean(databaseUrl))('fiscal document registry', () => {
       '20261004221411_operations_receipt_document_weights.sql',
       '20261004224629_cover_sales_contract_version_recorder_fk.sql',
       '20261004234000_operations_yard_occurrences_romaneio.sql',
+      '20261005002533_purchase_fiscal_payables.sql',
+      '20261005003926_cover_purchase_operation_foreign_keys.sql',
+      '20261005004718_preserve_outbound_fiscal_source_integrity.sql',
     ]) {
       await setup.query(await readFile(new URL(`../../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
     }
@@ -371,6 +375,72 @@ describe.runIf(Boolean(databaseUrl))('fiscal document registry', () => {
     expect(workspace.json()).toMatchObject({
       summary: { received: 0, validated: 0, rejected: 1, linkedTitles: 0 },
       documents: [{ status: 'REJECTED', title: null }],
+    });
+  });
+
+  it('links an accepted purchase receipt to inbound NF-e, payable, payment and reversal', async () => {
+    const server = app.getHttpAdapter().getInstance();
+    const initial = await server.inject({ method: 'GET', url: '/v1/fiscal', headers });
+    expect(initial.statusCode, initial.body).toBe(200);
+    const receipt = initial.json().eligiblePurchaseReceipts[0] as {
+      id: string; acceptedWeightKg: string; purchasePricePerSc: string;
+    };
+    expect(receipt).toBeTruthy();
+    const raw = new Decimal(receipt.acceptedWeightKg).div(60).times(receipt.purchasePricePerSc);
+    expect(raw.decimalPlaces()).toBeLessThanOrEqual(2);
+    const totalAmount = raw.toFixed(2);
+    const created = await server.inject({
+      method: 'POST', url: '/v1/fiscal/purchase-documents', headers,
+      payload: {
+        loadReceiptId: receipt.id, documentNumber: 'NF-COMPRA-E2E',
+        accessKey: '51000000000000000000000000000000000000000002',
+        issuedAt: '2026-10-02T10:00:00-03:00', totalAmount,
+        dueDate: '2026-10-20', titleNumber: 'CP-E2E-0001',
+        validationNotes: 'Conferência integrada de compra, peso e financeiro.',
+      },
+    });
+    expect(created.statusCode, created.body).toBe(201);
+    expect(created.json()).toMatchObject({ status: 'RECEIVED', expectedAmount: totalAmount });
+    const rejected = await server.inject({
+      method: 'POST', url: `/v1/fiscal/documents/${created.json().id}/reject`, headers,
+      payload: { reason: 'Número fiscal incorreto; corrigir e reconferir.' },
+    });
+    expect(rejected.statusCode, rejected.body).toBe(201);
+    const corrected = await server.inject({
+      method: 'PATCH', url: `/v1/fiscal/documents/${created.json().id}`, headers,
+      payload: {
+        documentNumber: 'NF-COMPRA-E2E-CORRIGIDA',
+        accessKey: '51000000000000000000000000000000000000000002',
+        issuedAt: '2026-10-02T10:00:00-03:00', totalAmount,
+        validationNotes: 'Documento de compra corrigido sem perder o vínculo operacional.',
+      },
+    });
+    expect(corrected.statusCode, corrected.body).toBe(200);
+    expect(corrected.json()).toMatchObject({ status: 'RECEIVED' });
+    const validated = await server.inject({
+      method: 'POST', url: `/v1/fiscal/documents/${created.json().id}/validate`, headers,
+    });
+    expect(validated.statusCode, validated.body).toBe(201);
+    expect(validated.json()).toMatchObject({ status: 'VALIDATED', linkedTitleId: expect.any(String) });
+    const titleId = validated.json().linkedTitleId as string;
+    const paid = await server.inject({
+      method: 'POST', url: `/v1/finance/titles/${titleId}/payments`, headers,
+      payload: { amount: '10.00', paidAt: '2026-10-03T10:00:00-03:00',
+        bankReference: 'PIX-COMPRA-E2E', notes: 'Pagamento parcial integrado.' },
+    });
+    expect(paid.statusCode, paid.body).toBe(201);
+    expect(paid.json()).toMatchObject({ purchaseReceiptId: receipt.id, status: 'PARTIALLY_SETTLED' });
+    const reversed = await server.inject({
+      method: 'POST', url: `/v1/finance/payments/${paid.json().id}/reverse`, headers,
+      payload: { reason: 'Estorno controlado do pagamento de teste.' },
+    });
+    expect(reversed.statusCode, reversed.body).toBe(201);
+    expect(reversed.json()).toMatchObject({ purchaseReceiptId: receipt.id, status: 'OPEN', reversed: true });
+    const overview = await server.inject({ method: 'GET', url: '/v1/overview', headers });
+    expect(overview.statusCode, overview.body).toBe(200);
+    expect(overview.json()).toMatchObject({
+      indicators: { purchasePayableOpenCount: 1 },
+      operational: { purchasePayablesOpen: 1 },
     });
   });
 });
