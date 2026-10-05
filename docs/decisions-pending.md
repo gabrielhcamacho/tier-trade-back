@@ -2,12 +2,11 @@
 
 O registro principal, com responsáveis por função e momento limite, está no [plano mestre da plataforma](../../tier-trade-platform/docs/plano-mestre.md#6-decisões-pendentes-com-momento-limite). Esta página mostra apenas os bloqueios próximos ao backend.
 
-## Antes da próxima modelagem contratual
+## Antes de ampliar modalidades contratuais
 
-- **D01 — Recorte do piloto:** trading de referência e de contraste, unidade, commodities, operações e modalidades reais. Responsáveis sugeridos: produto e parceiros piloto.
-- **D02 — Modalidades:** preço a fixar, fixação parcial, base/prêmio/câmbio e quatro cenários de aceite. Responsáveis sugeridos: direção comercial e produto.
+- **D02 — Preço a fixar e fixações parciais:** base, prêmio, câmbio e cenários homologados. Responsáveis sugeridos: direção comercial e produto.
 
-Essas decisões são necessárias antes da migration que amplie contrato e contraparte. O Escopo do MVP 1.2 inclui soja e milho e preço fixo ou a fixar. Uma redução formal de recorte exige registrar a decisão e atualizar os testes de aceite. A espera pelo contrato de compra da JD não impede os testes técnicos de preço fixo; preço a fixar e fixações parciais continuam bloqueados especificamente pela falta de base, prêmio, câmbio e cenários homologados de D02.
+O primeiro piloto foi confirmado para a JD, com soja e milho e preço fixo. A espera pelo contrato de compra da JD não impede os testes técnicos dessa modalidade. Preço a fixar e fixações parciais ficam para a evolução posterior e continuam bloqueados especificamente pela falta de base, prêmio, câmbio e cenários homologados.
 
 ## Antes das próximas slices especializadas
 
@@ -30,6 +29,8 @@ Convite via API administrativa e ambiente compartilhado do piloto permanecem sol
 
 ## Decisões já tomadas
 
+- A JD é a trading do primeiro piloto; os quatro cenários serão validados pelos diretores.
+- O primeiro piloto cobre soja e milho com preço fixo. Preço a fixar e fixações parciais serão implementados depois.
 - Supabase Auth é o primeiro adaptador de identidade; tenant vem de membership verificada, não do navegador.
 - A política de margem é configurável e versionada por tenant.
 - O projeto Supabase atual do Tier Trade é o banco de produção e também hospeda o bucket privado de documentos; ambientes futuros não podem compartilhar dados com ele.
