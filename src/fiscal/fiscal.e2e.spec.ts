@@ -47,6 +47,8 @@ describe.runIf(Boolean(databaseUrl))('fiscal document registry', () => {
       '20261005003926_cover_purchase_operation_foreign_keys.sql',
       '20261005004718_preserve_outbound_fiscal_source_integrity.sql',
       '20261005010100_grant_purchase_finance_runtime.sql',
+      '20261005021155_finance_governance_and_realized_margin.sql',
+      '20261005023251_cover_finance_governance_foreign_keys.sql',
     ]) {
       await setup.query(await readFile(new URL(`../../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
     }
@@ -437,6 +439,52 @@ describe.runIf(Boolean(databaseUrl))('fiscal document registry', () => {
     });
     expect(reversed.statusCode, reversed.body).toBe(201);
     expect(reversed.json()).toMatchObject({ purchaseReceiptId: receipt.id, status: 'OPEN', reversed: true });
+    const financeBefore = await server.inject({ method: 'GET', url: '/v1/finance', headers });
+    const purchaseEvent = financeBefore.json().events.find((event: { loadReceiptId: string }) =>
+      event.loadReceiptId === receipt.id) as { id: string; title: { outstandingAmount: string } };
+    const component = await server.inject({
+      method: 'POST', url: '/v1/finance/purchase-cost-components', headers,
+      payload: { financialEventId: purchaseEvent.id, componentType: 'QUALITY_DISCOUNT',
+        payableImpact: 'REDUCE_PAYABLE', amount: '5.00',
+        description: 'Desconto documentado no laudo de qualidade.', externalReference: 'LAUDO-E2E-01' },
+    });
+    expect(component.statusCode, component.body).toBe(201);
+    const policy = await server.inject({ method: 'POST', url: '/v1/finance/policies', headers,
+      payload: { paymentApprovalThreshold: '100.00' } });
+    expect(policy.statusCode, policy.body).toBe(201);
+    const batch = await server.inject({ method: 'POST', url: '/v1/finance/payment-batches', headers,
+      payload: { reference: 'LOTE-E2E-01', scheduledOn: '2026-10-21',
+        items: [{ titleId, amount: '10.00' }] } });
+    expect(batch.statusCode, batch.body).toBe(201);
+    const submitted = await server.inject({ method: 'POST',
+      url: `/v1/finance/payment-batches/${batch.json().id}/submit`, headers });
+    expect(submitted.json()).toMatchObject({ status: 'APPROVED', requiresApproval: false });
+    const executed = await server.inject({ method: 'POST',
+      url: `/v1/finance/payment-batches/${batch.json().id}/execute`, headers });
+    expect(executed.json()).toMatchObject({ status: 'EXECUTED', paymentCount: 1 });
+    const account = await server.inject({ method: 'POST', url: '/v1/finance/bank-accounts', headers,
+      payload: { code: 'BB01', name: 'Conta operacional E2E' } });
+    expect(account.statusCode, account.body).toBe(201);
+    const entry = await server.inject({ method: 'POST', url: '/v1/finance/bank-statement-entries', headers,
+      payload: { bankAccountId: account.json().id, occurredAt: '2026-10-21T10:00:00-03:00',
+        direction: 'DEBIT', amount: '10.00', bankReference: 'EXTRATO-E2E-01',
+        description: 'Pagamento do lote E2E.' } });
+    expect(entry.statusCode, entry.body).toBe(201);
+    const afterBatch = await server.inject({ method: 'GET', url: '/v1/finance', headers });
+    const executedBatch = afterBatch.json().governance.paymentBatches.find((item: { id: string }) =>
+      item.id === batch.json().id) as { items: Array<{ paymentId: string }> };
+    const reconciliation = await server.inject({ method: 'POST',
+      url: `/v1/finance/bank-statement-entries/${entry.json().id}/reconcile`, headers,
+      payload: { matchedType: 'PAYMENT', matchedId: executedBatch.items[0]!.paymentId } });
+    expect(reconciliation.statusCode, reconciliation.body).toBe(201);
+    expect(reconciliation.json()).toMatchObject({ status: 'MATCHED' });
+    const governed = await server.inject({ method: 'GET', url: '/v1/finance', headers });
+    expect(governed.json()).toMatchObject({ governance: {
+      activePolicy: { payment_approval_threshold: '100.00' },
+      purchaseCostComponents: [{ component_type: 'QUALITY_DISCOUNT', amount: '5.00' }],
+      paymentBatches: [{ status: 'EXECUTED' }],
+      bankStatementEntries: [{ status: 'MATCHED' }],
+    } });
     const overview = await server.inject({ method: 'GET', url: '/v1/overview', headers });
     expect(overview.statusCode, overview.body).toBe(200);
     expect(overview.json()).toMatchObject({

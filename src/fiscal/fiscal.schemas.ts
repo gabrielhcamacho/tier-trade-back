@@ -83,6 +83,7 @@ export const createFiscalEstablishmentSchema = z.object({
 export const createFiscalConfigurationSchema = z.object({
   establishmentId: z.uuid().nullable(),
   name: z.string().trim().min(3).max(120),
+  operationType: z.enum(['SALE_DISPATCH', 'PURCHASE_RECEIPT']).default('SALE_DISPATCH'),
   commodity: optionalText(2, 40),
   destinationUf: nullableUf,
   cfop: z.string().trim().regex(/^\d{4}$/, 'O CFOP deve conter quatro dígitos.').nullable(),
@@ -108,7 +109,7 @@ export const updateFiscalConfigurationSchema = createFiscalConfigurationSchema;
 export const createFiscalCalculationSchema = z.object({
   requestKey: z.uuid(),
   establishmentId: z.uuid(),
-  operationType: z.literal('SALE_DISPATCH'),
+  operationType: z.enum(['SALE_DISPATCH', 'PURCHASE_RECEIPT']),
   commodity: z.string().trim().min(2).max(40).transform((value) => value.toUpperCase()),
   destinationUf: uf,
   occurredOn: z.iso.date(),

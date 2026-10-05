@@ -72,3 +72,15 @@ O schema será versionado antes do primeiro consumidor externo. Esse transporte 
 # Risco
 
 - `risk.policy_configured`: nova versão do limite por commodity, com política substituída e valores usados.
+# Eventos financeiros de governança
+
+- `finance.purchase_cost_component_created`
+- `finance.purchase_cost_component_reversed`
+- `finance.policy_configured`
+- `finance.payment_batch_created`
+- `finance.payment_batch_submitted`
+- `finance.payment_batch_approved`
+- `finance.payment_batch_executed`
+- `finance.bank_account_created`
+- `finance.bank_statement_imported`
+- `finance.bank_statement_reconciled`

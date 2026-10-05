@@ -230,14 +230,16 @@ export class FiscalService {
              ON (fta.tenant_id,fta.fiscal_obligation_id)=(fo.tenant_id,fo.id)
           WHERE fo.tenant_id=$1 ORDER BY fo.due_date,fo.created_at,fo.id`, [tenantId]);
       const calculationSources = await client.query<{
-        id: string; reference: string; beneficiary_name: string; calculated_amount: string;
+        id: string; event_type: string; reference: string; beneficiary_name: string; calculated_amount: string;
       }>(
-        `SELECT fe.id,COALESCE(sc.reference,d.document_reference,fe.id::text) AS reference,
+        `SELECT fe.id,fe.event_type,COALESCE(sc.reference,d.document_reference,pc.id::text,fe.id::text) AS reference,
                 COALESCE(cp.legal_name,fa.legal_name) AS beneficiary_name,
                 fe.calculated_amount::text
            FROM app.financial_events fe
            LEFT JOIN app.sales_contracts sc
              ON (sc.tenant_id,sc.id)=(fe.tenant_id,fe.sales_contract_id)
+           LEFT JOIN app.contracts pc
+             ON (pc.tenant_id,pc.id)=(fe.tenant_id,fe.purchase_contract_id)
            LEFT JOIN app.counterparties cp
              ON (cp.tenant_id,cp.id)=(fe.tenant_id,fe.counterparty_id)
            LEFT JOIN app.fiscal_authorities fa
@@ -245,7 +247,8 @@ export class FiscalService {
            LEFT JOIN app.inventory_dispatches d
              ON (d.tenant_id,d.id)=(fe.tenant_id,fe.inventory_dispatch_id)
           WHERE fe.tenant_id=$1 AND fe.calculation_status='READY'
-            AND fe.direction='INFLOW' AND fe.calculated_amount IS NOT NULL
+            AND fe.event_type IN ('SALE_DISPATCH_RECEIVABLE','PURCHASE_RECEIPT_PAYABLE')
+            AND fe.calculated_amount IS NOT NULL
           ORDER BY fe.created_at DESC,fe.id DESC`, [tenantId]);
       const mapped = documents.rows.map((row) => this.mapDocument(row));
       const mappedConfigurations = configurations.rows.map((row) => this.mapConfiguration(row));
@@ -332,7 +335,7 @@ export class FiscalService {
           calculationStatus: row.calculation_status,
         })),
         calculationSources: calculationSources.rows.map((row) => ({
-          id: row.id, reference: row.reference, beneficiaryName: row.beneficiary_name,
+          id: row.id, eventType: row.event_type, reference: row.reference, beneficiaryName: row.beneficiary_name,
           amount: row.calculated_amount,
         })),
         taxCalculation: {
@@ -424,11 +427,11 @@ export class FiscalService {
       const id = randomUUID();
       await client.query(
         `INSERT INTO app.fiscal_configuration_versions
-          (tenant_id,id,configuration_key,version,establishment_id,name,commodity,destination_uf,
+          (tenant_id,id,configuration_key,version,establishment_id,name,operation_type,commodity,destination_uf,
            cfop,emission_strategy,technical_responsible,effective_from,effective_to,tax_components,
            rounding_mode,rounding_scale,created_by,updated_by)
-         VALUES ($1,$2,$2,1,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$15)`,
-        [tenantId, id, input.establishmentId, input.name, input.commodity, input.destinationUf,
+         VALUES ($1,$2,$2,1,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15,$16,$16)`,
+        [tenantId, id, input.establishmentId, input.name, input.operationType, input.commodity, input.destinationUf,
           input.cfop, input.emissionStrategy, input.technicalResponsible, input.effectiveFrom,
           input.effectiveTo, JSON.stringify(input.taxComponents), input.roundingMode,
           input.roundingScale, actorId]);
@@ -447,12 +450,12 @@ export class FiscalService {
       await this.assertEstablishment(client, tenantId, input.establishmentId);
       await client.query(
         `UPDATE app.fiscal_configuration_versions
-            SET establishment_id=$3,name=$4,commodity=$5,destination_uf=$6,cfop=$7,
-                emission_strategy=$8,technical_responsible=$9,effective_from=$10,effective_to=$11,
-                tax_components=$12::jsonb,rounding_mode=$13,rounding_scale=$14,
-                updated_by=$15,updated_at=now()
+            SET establishment_id=$3,name=$4,operation_type=$5,commodity=$6,destination_uf=$7,cfop=$8,
+                emission_strategy=$9,technical_responsible=$10,effective_from=$11,effective_to=$12,
+                tax_components=$13::jsonb,rounding_mode=$14,rounding_scale=$15,
+                updated_by=$16,updated_at=now()
           WHERE tenant_id=$1 AND id=$2`,
-        [tenantId, configurationId, input.establishmentId, input.name, input.commodity,
+        [tenantId, configurationId, input.establishmentId, input.name, input.operationType, input.commodity,
           input.destinationUf, input.cfop, input.emissionStrategy, input.technicalResponsible,
           input.effectiveFrom, input.effectiveTo, JSON.stringify(input.taxComponents),
           input.roundingMode, input.roundingScale, actorId]);
@@ -559,7 +562,9 @@ export class FiscalService {
              FROM app.financial_events
             WHERE tenant_id=$1 AND id=$2`, [tenantId, input.sourceId]);
         if (!source.rows[0]) throw new NotFoundException({ code: 'FINANCIAL_EVENT_NOT_FOUND' });
-        if (source.rows[0].event_type !== 'SALE_DISPATCH_RECEIVABLE'
+        const expectedEventType = input.operationType === 'SALE_DISPATCH'
+          ? 'SALE_DISPATCH_RECEIVABLE' : 'PURCHASE_RECEIPT_PAYABLE';
+        if (source.rows[0].event_type !== expectedEventType
           || source.rows[0].calculation_status !== 'READY' || !source.rows[0].calculated_amount) {
           throw new ConflictException({ code: 'FISCAL_CALCULATION_SOURCE_NOT_READY' });
         }

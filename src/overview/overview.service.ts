@@ -3,6 +3,7 @@ import Decimal from 'decimal.js';
 import { CommercialService } from '../commercial/commercial.service.js';
 import { DatabasePlatformPort } from '../database/database.js';
 import { FinanceService } from '../finance/finance.service.js';
+import { FinanceGovernanceService } from '../finance/finance-governance.service.js';
 import { InventoryService } from '../inventory/inventory.service.js';
 import { RiskService } from '../risk/risk.service.js';
 
@@ -19,6 +20,7 @@ export class OverviewService {
     @Inject(DatabasePlatformPort) private readonly db: DatabasePlatformPort,
     @Inject(CommercialService) private readonly commercial: CommercialService,
     @Inject(FinanceService) private readonly finance: FinanceService,
+    @Inject(FinanceGovernanceService) private readonly financeGovernance: FinanceGovernanceService,
     @Inject(InventoryService) private readonly inventory: InventoryService,
     @Inject(RiskService) private readonly risk: RiskService,
   ) {}
@@ -42,10 +44,11 @@ export class OverviewService {
     });
     // Each domain remains its data owner. This read model composes their public,
     // tenant-scoped workspaces; it does not write or recalculate official ledgers.
-    const [offers, contracts, finance, inventory, risk, operational] = await Promise.all([
+    const [offers, contracts, finance, governance, inventory, risk, operational] = await Promise.all([
       this.commercial.listOffers(tenantId, actorId),
       this.commercial.listContracts(tenantId, actorId),
       this.finance.workspace(tenantId, actorId),
+      this.financeGovernance.workspace(tenantId, actorId),
       this.inventory.position(tenantId, actorId),
       this.risk.workspace(tenantId, actorId),
       this.db.transaction(tenantId, async (client) => {
@@ -138,6 +141,13 @@ export class OverviewService {
       ...(operational.fiscalPending || operational.fiscalRejected ? [{ type: 'FISCAL_DOCUMENT_REVIEW',
         sourceId: tenantId, pendingCount: operational.fiscalPending,
         rejectedCount: operational.fiscalRejected, decisionOwner: 'FISCAL_EDIT' }] : []),
+      ...governance.paymentBatches.filter((batch) => batch.status === 'PENDING_APPROVAL')
+        .map((batch) => ({ type: 'PAYMENT_BATCH_APPROVAL', sourceId: batch.id,
+          amount: batch.total_amount, decisionOwner: 'FINANCE_APPROVE' })),
+      ...(governance.bankStatementEntries.some((entry) => entry.status === 'UNMATCHED')
+        ? [{ type: 'BANK_RECONCILIATION', sourceId: tenantId,
+          pendingCount: governance.bankStatementEntries.filter((entry) => entry.status === 'UNMATCHED').length,
+          decisionOwner: 'FINANCE_EDIT' }] : []),
     ];
 
     return {
@@ -154,6 +164,8 @@ export class OverviewService {
         projectedMarginStatus: !contractItems.length ? 'NO_DATA'
           : marginTotal === null || marginComponents.some((item) => item.amount === null)
             ? 'PENDING_ROUNDING_POLICY' : 'READY',
+        realizedMarginAmount: governance.realizedMargin.realizedMarginAmount,
+        realizedMarginStatus: governance.realizedMargin.status,
         purchaseContractedKg: purchaseContractedKg.toString(),
         purchaseReceivedKg: purchaseReceivedKg.toString(),
         salesContractedKg: salesContractedKg.toString(),
@@ -171,17 +183,23 @@ export class OverviewService {
         fiscalPendingCount: operational.fiscalPending,
         fiscalRejectedCount: operational.fiscalRejected,
         purchasePayableOpenCount: operational.purchasePayablesOpen,
+        paymentBatchApprovalCount: governance.paymentBatches
+          .filter((batch) => batch.status === 'PENDING_APPROVAL').length,
+        unmatchedBankEntryCount: governance.bankStatementEntries
+          .filter((entry) => entry.status === 'UNMATCHED').length,
       },
-      charts: { marginComponents, dueDates, byCommodity },
+      charts: { marginComponents, realizedMarginByCommodity: governance.realizedMargin.byCommodity,
+        dueDates, byCommodity },
       exceptions,
       unavailable: [
-        { code: 'REALIZED_MARGIN_BRIDGE', reason: 'Margem realizada e causas ainda não homologadas.' },
+        ...(governance.realizedMargin.status === 'NO_DATA'
+          ? [{ code: 'REALIZED_MARGIN_BRIDGE', reason: 'Aguardando compra e venda executadas e conectadas.' }] : []),
         { code: 'CASH_PROJECTION', reason: 'Saldo bancário inicial e movimentos não titulados indisponíveis.' },
         { code: 'AI_INSIGHTS', reason: 'Motor de evidências e confiança ainda não habilitado.' },
         { code: 'ROLE_AND_UNIT_SCOPE', reason: 'Papéis, equipes e unidades operacionais ainda não modelados.' },
       ],
       operational,
-      sources: { offers, contracts, finance, inventory, risk },
+      sources: { offers, contracts, finance, financeGovernance: governance, inventory, risk },
     };
   }
 }

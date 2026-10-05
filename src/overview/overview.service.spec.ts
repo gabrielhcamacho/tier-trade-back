@@ -3,6 +3,7 @@ import { OverviewService } from './overview.service.js';
 import type { DatabasePlatformPort } from '../database/database.js';
 import type { CommercialService } from '../commercial/commercial.service.js';
 import type { FinanceService } from '../finance/finance.service.js';
+import type { FinanceGovernanceService } from '../finance/finance-governance.service.js';
 import type { InventoryService } from '../inventory/inventory.service.js';
 import type { RiskService } from '../risk/risk.service.js';
 
@@ -29,11 +30,17 @@ function fixture() {
   const position = vi.fn(async () => ({ salesContracts: [
     { id: 's1', status: 'ACTIVE', commodity: 'MILHO', quantity_kg: '5000.000', dispatched_kg: '1000.000' },
   ] }));
+  const governanceWorkspace = vi.fn(async () => ({
+    realizedMargin: { status: 'NO_DATA', revenueAmount: '0.00', totalCostAmount: '0.00',
+      realizedMarginAmount: '0.00', byCommodity: [] },
+    paymentBatches: [], bankStatementEntries: [],
+  }));
   const riskWorkspace = vi.fn(async () => ({ positions: [] }));
   const service = new OverviewService(
     { transaction } as unknown as DatabasePlatformPort,
     { listOffers, listContracts } as unknown as CommercialService,
     { workspace } as unknown as FinanceService,
+    { workspace: governanceWorkspace } as unknown as FinanceGovernanceService,
     { position } as unknown as InventoryService,
     { workspace: riskWorkspace } as unknown as RiskService,
   );

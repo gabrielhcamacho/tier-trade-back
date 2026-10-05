@@ -39,6 +39,8 @@ describe('commercial foundation migration', () => {
       '20261005003926_cover_purchase_operation_foreign_keys.sql',
       '20261005004718_preserve_outbound_fiscal_source_integrity.sql',
       '20261005010100_grant_purchase_finance_runtime.sql',
+      '20261005021155_finance_governance_and_realized_margin.sql',
+      '20261005023251_cover_finance_governance_foreign_keys.sql',
     ]) {
       const migration = await readFile(new URL(`../../supabase/migrations/${migrationName}`, import.meta.url), 'utf8');
       await db.exec(migration);

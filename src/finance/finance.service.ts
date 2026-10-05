@@ -124,7 +124,8 @@ export class FinanceService extends FinancialProjectionPort {
               WHERE p.tenant_id=ft.tenant_id AND p.title_id=ft.id
            ) fp ON true
            LEFT JOIN LATERAL (
-             SELECT COALESCE(sum(fta.amount),0)::numeric(20,2) AS adjusted_amount
+             SELECT COALESCE(sum(CASE WHEN fta.adjustment_effect='INCREASE' THEN -fta.amount ELSE fta.amount END)
+               FILTER (WHERE fta.reversed_at IS NULL),0)::numeric(20,2) AS adjusted_amount
                FROM app.financial_title_adjustments fta
               WHERE fta.tenant_id=ft.tenant_id AND fta.title_id=ft.id
            ) adj ON true
@@ -302,8 +303,9 @@ export class FinanceService extends FinancialProjectionPort {
         `SELECT
            COALESCE((SELECT sum(amount) FROM app.financial_settlements
              WHERE tenant_id=$1 AND title_id=$2 AND reversed_at IS NULL),0)::text AS paid,
-           COALESCE((SELECT sum(amount) FROM app.financial_title_adjustments
-             WHERE tenant_id=$1 AND title_id=$2),0)::text AS adjusted`, [tenantId, titleId]);
+           COALESCE((SELECT sum(CASE WHEN adjustment_effect='INCREASE' THEN -amount ELSE amount END)
+             FROM app.financial_title_adjustments
+             WHERE tenant_id=$1 AND title_id=$2 AND reversed_at IS NULL),0)::text AS adjusted`, [tenantId, titleId]);
       const amount = new Decimal(input.amount);
       const remaining = new Decimal(title.rows[0].amount)
         .minus(balance.rows[0]!.adjusted).minus(balance.rows[0]!.paid);
@@ -353,8 +355,9 @@ export class FinanceService extends FinancialProjectionPort {
       const balance = await client.query<{ amount: string; settled: string; adjusted: string }>(
         `SELECT ft.amount::text,
                 COALESCE(sum(fs.amount) FILTER (WHERE fs.reversed_at IS NULL),0)::text AS settled,
-                COALESCE((SELECT sum(fta.amount) FROM app.financial_title_adjustments fta
-                  WHERE fta.tenant_id=ft.tenant_id AND fta.title_id=ft.id),0)::text AS adjusted
+                COALESCE((SELECT sum(CASE WHEN fta.adjustment_effect='INCREASE' THEN -fta.amount ELSE fta.amount END)
+                  FROM app.financial_title_adjustments fta
+                  WHERE fta.tenant_id=ft.tenant_id AND fta.title_id=ft.id AND fta.reversed_at IS NULL),0)::text AS adjusted
            FROM app.financial_titles ft
            LEFT JOIN app.financial_settlements fs
              ON (fs.tenant_id,fs.title_id)=(ft.tenant_id,ft.id)
@@ -395,11 +398,15 @@ export class FinanceService extends FinancialProjectionPort {
       if (!isTax && !isPurchase) {
         throw new ConflictException({ code: 'PAYABLE_SOURCE_REQUIRED' });
       }
-      const paidResult = await client.query<{ paid: string }>(
-        `SELECT COALESCE(sum(amount) FILTER (WHERE reversed_at IS NULL),0)::text AS paid
-           FROM app.financial_payments WHERE tenant_id=$1 AND title_id=$2`, [tenantId, titleId]);
+      const paidResult = await client.query<{ paid: string; adjusted: string }>(
+        `SELECT COALESCE((SELECT sum(amount) FILTER (WHERE reversed_at IS NULL)
+             FROM app.financial_payments WHERE tenant_id=$1 AND title_id=$2),0)::text AS paid,
+           COALESCE((SELECT sum(CASE WHEN adjustment_effect='INCREASE' THEN -amount ELSE amount END)
+             FROM app.financial_title_adjustments
+             WHERE tenant_id=$1 AND title_id=$2 AND reversed_at IS NULL),0)::text AS adjusted`, [tenantId, titleId]);
       const amount = new Decimal(input.amount);
-      const remaining = new Decimal(title.rows[0].amount).minus(paidResult.rows[0]!.paid);
+      const remaining = new Decimal(title.rows[0].amount)
+        .minus(paidResult.rows[0]!.adjusted).minus(paidResult.rows[0]!.paid);
       if (amount.greaterThan(remaining)) {
         throw new UnprocessableEntityException({
           code: 'PAYMENT_EXCEEDS_TITLE_BALANCE', outstandingAmount: remaining.toFixed(2),
@@ -459,16 +466,20 @@ export class FinanceService extends FinancialProjectionPort {
         `UPDATE app.financial_payments
             SET reversed_at=now(),reversed_by=$3,reversal_reason=$4
           WHERE tenant_id=$1 AND id=$2`, [tenantId, paymentId, actorId, input.reason]);
-      const balance = await client.query<{ amount: string; paid: string }>(
+      const balance = await client.query<{ amount: string; paid: string; adjusted: string }>(
         `SELECT ft.amount::text,
-                COALESCE(sum(p.amount) FILTER (WHERE p.reversed_at IS NULL),0)::text AS paid
+                COALESCE(sum(p.amount) FILTER (WHERE p.reversed_at IS NULL),0)::text AS paid,
+                COALESCE((SELECT sum(CASE WHEN fta.adjustment_effect='INCREASE' THEN -fta.amount ELSE fta.amount END)
+                  FROM app.financial_title_adjustments fta
+                  WHERE fta.tenant_id=ft.tenant_id AND fta.title_id=ft.id AND fta.reversed_at IS NULL),0)::text AS adjusted
            FROM app.financial_titles ft
            LEFT JOIN app.financial_payments p
              ON (p.tenant_id,p.title_id)=(ft.tenant_id,ft.id)
           WHERE ft.tenant_id=$1 AND ft.id=$2 GROUP BY ft.tenant_id,ft.id,ft.amount`, [tenantId, titleId]);
       const paid = new Decimal(balance.rows[0]!.paid);
+      const payable = new Decimal(balance.rows[0]!.amount).minus(balance.rows[0]!.adjusted);
       const status = paid.isZero()
-        ? 'OPEN' : paid.equals(balance.rows[0]!.amount) ? 'SETTLED' : 'PARTIALLY_SETTLED';
+        ? 'OPEN' : paid.equals(payable) ? 'SETTLED' : 'PARTIALLY_SETTLED';
       await client.query('UPDATE app.financial_titles SET status=$3 WHERE tenant_id=$1 AND id=$2',
         [tenantId, titleId, status]);
       if (obligationId) {
@@ -633,7 +644,8 @@ export class FinanceService extends FinancialProjectionPort {
                 COALESCE(paid.settled,0)::text AS settled
            FROM app.financial_titles ft
            LEFT JOIN LATERAL (
-             SELECT COALESCE(sum(fta.amount),0)::numeric(20,2) AS adjusted
+             SELECT COALESCE(sum(CASE WHEN fta.adjustment_effect='INCREASE' THEN -fta.amount ELSE fta.amount END)
+               FILTER (WHERE fta.reversed_at IS NULL),0)::numeric(20,2) AS adjusted
                FROM app.financial_title_adjustments fta
               WHERE fta.tenant_id=ft.tenant_id AND fta.title_id=ft.id
            ) adj ON true

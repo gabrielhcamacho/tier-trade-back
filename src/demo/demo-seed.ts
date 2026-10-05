@@ -137,7 +137,8 @@ export async function resetDemoTenant(
     if (membership.rowCount !== 1) throw new Error('ACTIVE_DEMO_ACTOR_MEMBERSHIP_NOT_FOUND');
     const capabilities = membership.rows[0]?.capabilities ?? [];
     if (!capabilities.includes('COMMERCIAL_EDIT') || !capabilities.includes('OPERATIONS_EDIT')
-      || !capabilities.includes('FINANCE_EDIT') || !capabilities.includes('FISCAL_EDIT')
+      || !capabilities.includes('FINANCE_EDIT') || !capabilities.includes('FINANCE_APPROVE')
+      || !capabilities.includes('FISCAL_EDIT')
       || !capabilities.includes('RISK_MANAGE')) {
       throw new Error('DEMO_ACTOR_CAPABILITIES_INCOMPLETE');
     }
