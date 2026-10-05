@@ -4,14 +4,18 @@ import { Identity, type RequestIdentity, RequestIdentityGuard } from '../auth/re
 import { SchemaPipe } from '../common/schema.pipe.js';
 import {
   cancelOfferSchema,
+  createContractObligationSchema,
   createCounterpartySchema,
   createOfferSchema,
   marginPolicySchema,
+  updateContractObligationSchema,
   updateCounterpartyProfileSchema,
   type CancelOfferInput,
+  type CreateContractObligationInput,
   type CreateCounterpartyInput,
   type CreateOfferInput,
   type MarginPolicyInput,
+  type UpdateContractObligationInput,
   type UpdateCounterpartyProfileInput,
 } from './commercial.schemas.js';
 import { CommercialService } from './commercial.service.js';
@@ -91,6 +95,23 @@ export class CommercialController {
   summary(@Identity() identity: RequestIdentity,
     @Param('contractId', ParseUUIDPipe) contractId: string) {
     return this.service.contractSummary(identity.tenantId, identity.actorId, contractId);
+  }
+
+  @Post('contracts/:contractId/obligations')
+  createObligation(@Identity() identity: RequestIdentity,
+    @Param('contractId', ParseUUIDPipe) contractId: string,
+    @Body(new SchemaPipe(createContractObligationSchema)) input: CreateContractObligationInput) {
+    return this.service.createContractObligation(identity.tenantId, identity.actorId, contractId, input);
+  }
+
+  @Put('contracts/:contractId/obligations/:obligationId')
+  updateObligation(@Identity() identity: RequestIdentity,
+    @Param('contractId', ParseUUIDPipe) contractId: string,
+    @Param('obligationId', ParseUUIDPipe) obligationId: string,
+    @Body(new SchemaPipe(updateContractObligationSchema)) input: UpdateContractObligationInput) {
+    return this.service.updateContractObligation(
+      identity.tenantId, identity.actorId, contractId, obligationId, input,
+    );
   }
 
   @Get('settings/margin-policy/MILHO')

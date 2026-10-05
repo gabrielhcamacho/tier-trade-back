@@ -183,10 +183,36 @@ paths:
       responses: { '201': { description: Contrato ativado } }
   /v1/contracts/{contractId}/summary:
     get:
-      summary: Retorna resumo operacional do contrato
+      summary: Retorna resumo operacional do contrato, inclusive obrigações e seus prazos
       parameters:
         - { name: contractId, in: path, required: true, schema: { type: string, format: uuid } }
       responses: { '200': { description: Resumo do contrato } }
+  /v1/contracts/{contractId}/obligations:
+    post:
+      summary: Cria obrigação contratual do tenant e registra auditoria
+      description: Exige COMMERCIAL_EDIT e contrato ativo. A situação inicial é PENDING.
+      parameters:
+        - { name: contractId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ContractObligationDetails' } } }
+      responses:
+        '201': { description: Obrigação criada e vinculada ao contrato }
+        '404': { description: Contrato ou permissão não encontrados no tenant }
+        '409': { description: Contrato não ativo }
+  /v1/contracts/{contractId}/obligations/{obligationId}:
+    put:
+      summary: Atualiza responsável, prazo, descrição e situação de uma obrigação
+      description: Exige COMMERCIAL_EDIT. Toda alteração é auditada e gera evento para a projeção do contrato.
+      parameters:
+        - { name: contractId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: obligationId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/UpdateContractObligation' } } }
+      responses:
+        '200': { description: Obrigação atualizada e auditada }
+        '404': { description: Obrigação ou permissão não encontrada no tenant }
   /v1/contracts/{contractId}/loads:
     get:
       summary: Lista a agenda e os saldos físicos do contrato
@@ -787,6 +813,25 @@ components:
       required: true
       schema: { type: string, format: uuid }
   schemas:
+    ContractObligationDetails:
+      type: object
+      additionalProperties: false
+      required: [title, description, dueDate, responsibleName]
+      properties:
+        title: { type: string, minLength: 3, maxLength: 160 }
+        description: { type: [string, 'null'], minLength: 3, maxLength: 1000 }
+        dueDate: { type: [string, 'null'], format: date }
+        responsibleName: { type: [string, 'null'], minLength: 2, maxLength: 120 }
+    UpdateContractObligation:
+      type: object
+      additionalProperties: false
+      required: [title, description, dueDate, responsibleName, status]
+      properties:
+        title: { type: string, minLength: 3, maxLength: 160 }
+        description: { type: [string, 'null'], minLength: 3, maxLength: 1000 }
+        dueDate: { type: [string, 'null'], format: date }
+        responsibleName: { type: [string, 'null'], minLength: 2, maxLength: 120 }
+        status: { type: string, enum: [PENDING, IN_PROGRESS, COMPLETED, CANCELLED] }
     CreateInventoryLocation:
       type: object
       additionalProperties: false

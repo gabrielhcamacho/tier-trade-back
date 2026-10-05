@@ -50,6 +50,22 @@ export const marginPolicySchema = z.object({
   absoluteFloorMarginPerSc: decimalString,
 });
 
+const obligationDetails = {
+  title: z.string().trim().min(3).max(160),
+  description: z.string().trim().min(3).max(1000).nullable(),
+  dueDate: localDate.nullable(),
+  responsibleName: z.string().trim().min(2).max(120).nullable(),
+};
+
+export const createContractObligationSchema = z.object(obligationDetails);
+
+export const updateContractObligationSchema = z.object({
+  ...obligationDetails,
+  status: z.enum(['PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED']),
+});
+
 export type CancelOfferInput = z.infer<typeof cancelOfferSchema>;
 export type MarginPolicyInput = z.infer<typeof marginPolicySchema>;
 export type UpdateCounterpartyProfileInput = z.infer<typeof updateCounterpartyProfileSchema>;
+export type CreateContractObligationInput = z.infer<typeof createContractObligationSchema>;
+export type UpdateContractObligationInput = z.infer<typeof updateContractObligationSchema>;

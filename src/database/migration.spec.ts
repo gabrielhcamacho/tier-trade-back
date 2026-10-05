@@ -44,6 +44,7 @@ describe('commercial foundation migration', () => {
       '20261005160713_operational_completeness_foundation.sql',
       '20261005160901_cover_operational_completeness_foreign_keys.sql',
       '20261005161634_demo_reset_operational_completeness.sql',
+      '20261005213800_contract_obligation_workflow.sql',
     ]) {
       const migration = await readFile(new URL(`../../supabase/migrations/${migrationName}`, import.meta.url), 'utf8');
       await db.exec(migration);

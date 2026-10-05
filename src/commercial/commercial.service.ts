@@ -4,7 +4,15 @@ import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { DatabasePlatformPort } from '../database/database.js';
 import { calculateProjectedMargin, decideSubmission } from '../domain/pricing.js';
-import type { CancelOfferInput, CreateCounterpartyInput, CreateOfferInput, MarginPolicyInput, UpdateCounterpartyProfileInput } from './commercial.schemas.js';
+import type {
+  CancelOfferInput,
+  CreateContractObligationInput,
+  CreateCounterpartyInput,
+  CreateOfferInput,
+  MarginPolicyInput,
+  UpdateContractObligationInput,
+  UpdateCounterpartyProfileInput,
+} from './commercial.schemas.js';
 
 interface MarginPolicyRow {
   id: string;
@@ -307,9 +315,12 @@ export class CommercialService {
         `INSERT INTO app.contracts (tenant_id,id,offer_id,status,created_by)
          VALUES ($1,$2,$3,'ACTIVE',$4)`, [tenantId, contractId, offerId, actorId]);
       await client.query(
-        `INSERT INTO app.contract_obligations (tenant_id,id,contract_id,code,status)
-         VALUES ($1,$2,$3,'SIGNED_CONTRACT','PENDING'),($1,$4,$3,'DELIVERY_SCHEDULE','PENDING')`,
-        [tenantId, randomUUID(), contractId, randomUUID()]);
+        `INSERT INTO app.contract_obligations
+           (tenant_id,id,contract_id,code,title,status,created_by)
+         VALUES
+           ($1,$2,$3,'SIGNED_CONTRACT','Contrato assinado','PENDING',$5),
+           ($1,$4,$3,'DELIVERY_SCHEDULE','Agenda de entrega','PENDING',$5)`,
+        [tenantId, randomUUID(), contractId, randomUUID(), actorId]);
       await client.query(`UPDATE app.offers SET status='CONVERTED', updated_at=now()
         WHERE tenant_id=$1 AND id=$2`, [tenantId, offerId]);
       await this.record(client, tenantId, actorId, 'contract.activated', 'contract', contractId, { offerId });
@@ -354,7 +365,7 @@ export class CommercialService {
               WHERE l.tenant_id=c.tenant_id AND l.contract_id=c.id AND l.status <> 'CANCELLED'
            ) load_totals ON true
            LEFT JOIN LATERAL (
-             SELECT count(*) FILTER (WHERE ob.status='PENDING')::integer AS pending_obligations
+             SELECT count(*) FILTER (WHERE ob.status IN ('PENDING','IN_PROGRESS'))::integer AS pending_obligations
                FROM app.contract_obligations ob
               WHERE ob.tenant_id=c.tenant_id AND ob.contract_id=c.id
            ) obligation_totals ON true
@@ -382,7 +393,21 @@ export class CommercialService {
                 s.purchase_price_per_sc, s.sale_reference_per_sc, s.total_costs_per_sc,
                 s.projected_margin_per_sc, s.policy_version,
                 COALESCE(load_totals.load_count,0)::integer AS load_count,
-                COALESCE(jsonb_agg(jsonb_build_object('code', ob.code, 'status', ob.status))
+                COALESCE(jsonb_agg(jsonb_build_object(
+                  'id', ob.id,
+                  'code', ob.code,
+                  'title', COALESCE(ob.title, CASE ob.code
+                    WHEN 'SIGNED_CONTRACT' THEN 'Contrato assinado'
+                    WHEN 'DELIVERY_SCHEDULE' THEN 'Agenda de entrega'
+                    ELSE ob.code END),
+                  'description', ob.description,
+                  'due_date', ob.due_date,
+                  'responsible_name', ob.responsible_name,
+                  'status', ob.status,
+                  'completed_at', ob.completed_at,
+                  'created_at', ob.created_at,
+                  'updated_at', ob.updated_at
+                ) ORDER BY ob.due_date NULLS LAST, ob.created_at, ob.id)
                   FILTER (WHERE ob.id IS NOT NULL), '[]'::jsonb) AS obligations
            FROM app.contracts c
            JOIN app.offers o ON (o.tenant_id,o.id)=(c.tenant_id,c.offer_id)
@@ -398,6 +423,74 @@ export class CommercialService {
                    s.purchase_price_per_sc,s.sale_reference_per_sc,s.total_costs_per_sc,
                    s.projected_margin_per_sc,s.policy_version,load_totals.load_count`, [tenantId, contractId]);
       if (!result.rows[0]) throw new NotFoundException({ code: 'CONTRACT_NOT_FOUND' });
+      return result.rows[0];
+    });
+  }
+
+  async createContractObligation(tenantId: string, actorId: string, contractId: string,
+    input: CreateContractObligationInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'COMMERCIAL_EDIT');
+      const contract = await client.query<{ status: string }>(
+        'SELECT status FROM app.contracts WHERE tenant_id=$1 AND id=$2 FOR UPDATE',
+        [tenantId, contractId],
+      );
+      if (!contract.rows[0]) throw new NotFoundException({ code: 'CONTRACT_NOT_FOUND' });
+      if (contract.rows[0].status !== 'ACTIVE') {
+        throw new ConflictException({ code: 'CONTRACT_NOT_ACTIVE' });
+      }
+      const obligationId = randomUUID();
+      const code = `CUSTOM_${obligationId.replaceAll('-', '').toUpperCase()}`;
+      const result = await client.query(
+        `INSERT INTO app.contract_obligations
+           (tenant_id,id,contract_id,code,title,description,due_date,responsible_name,status,created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'PENDING',$9)
+         RETURNING id,code,title,description,due_date::text,responsible_name,status,
+                   completed_at::text,created_at::text,updated_at::text`,
+        [tenantId, obligationId, contractId, code, input.title, input.description, input.dueDate,
+          input.responsibleName, actorId],
+      );
+      await this.record(client, tenantId, actorId, 'contract.obligation.created', 'contract', contractId,
+        { obligationId, code, title: input.title, dueDate: input.dueDate, responsibleName: input.responsibleName });
+      return result.rows[0];
+    });
+  }
+
+  async updateContractObligation(tenantId: string, actorId: string, contractId: string,
+    obligationId: string, input: UpdateContractObligationInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'COMMERCIAL_EDIT');
+      const obligation = await client.query<{
+        status: string; code: string; title: string | null; description: string | null;
+        due_date: string | null; responsible_name: string | null;
+      }>(
+        `SELECT status,code,title,description,due_date::text,responsible_name
+           FROM app.contract_obligations
+          WHERE tenant_id=$1 AND contract_id=$2 AND id=$3 FOR UPDATE`,
+        [tenantId, contractId, obligationId],
+      );
+      if (!obligation.rows[0]) throw new NotFoundException({ code: 'CONTRACT_OBLIGATION_NOT_FOUND' });
+      const completed = input.status === 'COMPLETED';
+      const result = await client.query(
+        `UPDATE app.contract_obligations
+            SET title=$4,description=$5,due_date=$6,responsible_name=$7,status=$8,
+                completed_at=CASE WHEN $8='COMPLETED' THEN COALESCE(completed_at,now()) ELSE NULL END,
+                completed_by=CASE WHEN $8='COMPLETED' THEN COALESCE(completed_by,$9::uuid) ELSE NULL END,
+                updated_at=now()
+          WHERE tenant_id=$1 AND contract_id=$2 AND id=$3
+        RETURNING id,code,title,description,due_date::text,responsible_name,status,
+                  completed_at::text,created_at::text,updated_at::text`,
+        [tenantId, contractId, obligationId, input.title, input.description, input.dueDate,
+          input.responsibleName, input.status, actorId],
+      );
+      await this.record(client, tenantId, actorId, 'contract.obligation.updated', 'contract', contractId,
+        { obligationId, code: obligation.rows[0].code,
+          before: { title: obligation.rows[0].title, description: obligation.rows[0].description,
+            dueDate: obligation.rows[0].due_date, responsibleName: obligation.rows[0].responsible_name,
+            status: obligation.rows[0].status },
+          after: { title: input.title, description: input.description, dueDate: input.dueDate,
+            responsibleName: input.responsibleName, status: input.status },
+          completedAtSet: completed });
       return result.rows[0];
     });
   }

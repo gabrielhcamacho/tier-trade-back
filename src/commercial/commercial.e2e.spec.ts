@@ -60,6 +60,7 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     await setup.query(await readFile(new URL('../../supabase/migrations/20261005160713_operational_completeness_foundation.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261005160901_cover_operational_completeness_foreign_keys.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261005161634_demo_reset_operational_completeness.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261005213800_contract_obligation_workflow.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../scripts/seed-local.sql', import.meta.url), 'utf8'));
     await setup.end();
 
@@ -165,6 +166,62 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     expect(summary.statusCode).toBe(200);
     expect(summary.json()).toMatchObject({ status: 'ACTIVE' });
     expect(summary.json().obligations).toHaveLength(2);
+
+    const createdObligation = await server.inject({
+      method: 'POST', url: `/v1/contracts/${contract.contractId}/obligations`, headers: identityHeaders,
+      payload: {
+        title: 'Conferir garantia contratual',
+        description: 'Validar o documento anexado antes da primeira entrega.',
+        dueDate: '2026-11-05',
+        responsibleName: 'Equipe de contratos',
+      },
+    });
+    expect(createdObligation.statusCode, createdObligation.body).toBe(201);
+    expect(createdObligation.json()).toMatchObject({
+      title: 'Conferir garantia contratual', due_date: '2026-11-05',
+      responsible_name: 'Equipe de contratos', status: 'PENDING',
+    });
+    const obligationId = createdObligation.json().id as string;
+    const obligationInput = {
+      title: 'Conferir garantia contratual',
+      description: 'Validar o documento anexado antes da primeira entrega.',
+      dueDate: '2026-11-05',
+      responsibleName: 'Equipe de contratos',
+    };
+    const completedObligation = await server.inject({
+      method: 'PUT', url: `/v1/contracts/${contract.contractId}/obligations/${obligationId}`,
+      headers: identityHeaders, payload: { ...obligationInput, status: 'COMPLETED' },
+    });
+    expect(completedObligation.statusCode, completedObligation.body).toBe(200);
+    expect(completedObligation.json()).toMatchObject({ status: 'COMPLETED' });
+    expect(completedObligation.json().completed_at).not.toBeNull();
+    const reopenedObligation = await server.inject({
+      method: 'PUT', url: `/v1/contracts/${contract.contractId}/obligations/${obligationId}`,
+      headers: identityHeaders, payload: { ...obligationInput, status: 'PENDING' },
+    });
+    expect(reopenedObligation.statusCode, reopenedObligation.body).toBe(200);
+    expect(reopenedObligation.json()).toMatchObject({ status: 'PENDING', completed_at: null });
+    const cancelledObligation = await server.inject({
+      method: 'PUT', url: `/v1/contracts/${contract.contractId}/obligations/${obligationId}`,
+      headers: identityHeaders, payload: { ...obligationInput, status: 'CANCELLED' },
+    });
+    expect(cancelledObligation.statusCode, cancelledObligation.body).toBe(200);
+    expect(cancelledObligation.json()).toMatchObject({ status: 'CANCELLED', completed_at: null });
+    const isolatedObligationUpdate = await server.inject({
+      method: 'PUT', url: `/v1/contracts/${contract.contractId}/obligations/${obligationId}`,
+      headers: { ...identityHeaders, 'x-tenant-id': '99999999-9999-4999-8999-999999999999' },
+      payload: { ...obligationInput, status: 'PENDING' },
+    });
+    expect(isolatedObligationUpdate.statusCode).toBe(404);
+    const summaryWithObligation = await server.inject({
+      method: 'GET', url: `/v1/contracts/${contract.contractId}/summary`, headers: identityHeaders,
+    });
+    expect(summaryWithObligation.json().obligations).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: obligationId, title: obligationInput.title, due_date: obligationInput.dueDate,
+        responsible_name: obligationInput.responsibleName, status: 'CANCELLED',
+      }),
+    ]));
 
     const scheduledLoad = await server.inject({
       method: 'POST', url: `/v1/contracts/${contract.contractId}/loads`, headers: identityHeaders,
@@ -431,7 +488,7 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
 
     const processor = app.get(OutboxProcessor);
     const firstPass = await processor.processTenant(identityHeaders['x-tenant-id']);
-    expect(firstPass).toMatchObject({ claimed: 19, published: 19, failed: 0, recovered: 0, pending: 0 });
+    expect(firstPass).toMatchObject({ claimed: 23, published: 23, failed: 0, recovered: 0, pending: 0 });
     expect(await processor.processTenant(identityHeaders['x-tenant-id'])).toMatchObject({
       claimed: 0, published: 0, failed: 0, recovered: 0, pending: 0,
     });
@@ -454,9 +511,9 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
         WHERE tenant_id=$1 AND aggregate_id=$2 AND event_type='offer.cancelled'`,
       [identityHeaders['x-tenant-id'], cancellableOffer.offerId],
     );
-    expect(activity.rows[0]?.count).toBe('19');
+    expect(activity.rows[0]?.count).toBe('23');
     expect(projection.rows[0]?.projected_margin_per_sc).toBe('3.000000');
-    expect(projection.rows[0]?.obligations).toHaveLength(2);
+    expect(projection.rows[0]?.obligations).toHaveLength(3);
     expect(cancellationAudit.rows[0]?.payload).toEqual({
       previousStatus: 'APPROVED',
       reason: cancellationReason,

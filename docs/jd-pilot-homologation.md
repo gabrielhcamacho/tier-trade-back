@@ -43,6 +43,15 @@ Os valores usados nessas provas são dados demonstrativos explícitos. A execuç
 
 O próximo aceite técnico controlado deve usar um documento e valores deliberadamente escolhidos para o piloto, confirmar a persistência e depois decidir se esses registros permanecem como dados demonstrativos.
 
+## Evolução de obrigações contratuais — preparada, ainda não promovida
+
+- A trading pode criar obrigações vinculadas a um contrato ativo e atualizar responsável, prazo, descrição e situação diretamente no detalhe do contrato.
+- Cada mudança registra autor, estado anterior e novo estado na auditoria, gera evento e atualiza a projeção do contrato; a carteira e a Central contam obrigações pendentes ou em andamento.
+- A agenda de cargas continua distinguindo as duas pré-condições operacionais conhecidas das demais obrigações. Obrigações criadas pelo usuário não se tornam automaticamente bloqueios da carga.
+- Os testes integrados em PostgreSQL descartável no Colima do HD externo passaram (41 testes em 17 arquivos), assim como o build da API e do front.
+- A migration foi desenhada para coexistir com a versão anterior da API durante a promoção. O autor de conclusão de registros históricos permanece desconhecido quando não existe evidência auditável; não é inferido do criador do contrato.
+- Esta evolução só deve ser promovida após confirmar backup/PITR do banco de produção e executar a ordem migration → API/worker → frontend descrita em `deployment.md`.
+
 ## Cenários mínimos para aceite humano
 
 | Cenário | Commodity | Operação | Resultado esperado |

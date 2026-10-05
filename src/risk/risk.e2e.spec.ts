@@ -51,6 +51,7 @@ describe.runIf(Boolean(databaseUrl))('risk position', () => {
       '20261005160713_operational_completeness_foundation.sql',
       '20261005160901_cover_operational_completeness_foreign_keys.sql',
       '20261005161634_demo_reset_operational_completeness.sql',
+      '20261005213800_contract_obligation_workflow.sql',
     ];
     for (const migration of migrations) {
       await setup.query(await readFile(new URL(`../../supabase/migrations/${migration}`, import.meta.url), 'utf8'));

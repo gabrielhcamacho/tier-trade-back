@@ -130,7 +130,7 @@ export class OutboxProcessor {
           JSON.stringify(event.payload), event.occurred_at],
       );
 
-      if (event.event_type === 'contract.activated') {
+      if (event.event_type === 'contract.activated' || event.event_type.startsWith('contract.obligation.')) {
         await this.projectContractSummary(client, tenantId, event);
       }
 
@@ -153,7 +153,18 @@ export class OutboxProcessor {
        SELECT c.tenant_id,c.id,c.offer_id,c.status,o.commodity,o.unit,o.quantity_sc,o.delivery_start,o.delivery_end,
               s.purchase_price_per_sc,s.sale_reference_per_sc,s.total_costs_per_sc,s.projected_margin_per_sc,
               s.policy_version,
-              COALESCE(jsonb_agg(jsonb_build_object('code',ob.code,'status',ob.status) ORDER BY ob.code)
+              COALESCE(jsonb_agg(jsonb_build_object(
+                'id',ob.id,
+                'code',ob.code,
+                'title',ob.title,
+                'description',ob.description,
+                'due_date',ob.due_date,
+                'responsible_name',ob.responsible_name,
+                'status',ob.status,
+                'completed_at',ob.completed_at,
+                'created_at',ob.created_at,
+                'updated_at',ob.updated_at
+              ) ORDER BY ob.due_date NULLS LAST,ob.created_at,ob.id)
                 FILTER (WHERE ob.id IS NOT NULL),'[]'::jsonb),$3
          FROM app.contracts c
          JOIN app.offers o ON (o.tenant_id,o.id)=(c.tenant_id,c.offer_id)

@@ -294,12 +294,12 @@ async function seedOperationalData(client: PoolClient, input: ResetDemoTenantInp
   );
   await client.query(
     `INSERT INTO app.contract_obligations
-      (tenant_id,id,contract_id,code,status,completed_at) VALUES
-      ($1,$2,$6,'SIGNED_CONTRACT','COMPLETED','2026-09-13T12:00:00Z'),
-      ($1,$3,$6,'DELIVERY_SCHEDULE','COMPLETED','2026-09-20T12:00:00Z'),
-      ($1,$4,$7,'SIGNED_CONTRACT','COMPLETED','2026-09-18T12:00:00Z'),
-      ($1,$5,$7,'DELIVERY_SCHEDULE','PENDING',NULL)`,
-    [tenantId, ...ids.obligations, ...ids.contracts],
+      (tenant_id,id,contract_id,code,title,status,completed_at,created_by,completed_by) VALUES
+      ($1,$2,$6,'SIGNED_CONTRACT','Contrato assinado','COMPLETED','2026-09-13T12:00:00Z',$8,$8),
+      ($1,$3,$6,'DELIVERY_SCHEDULE','Agenda de entrega','COMPLETED','2026-09-20T12:00:00Z',$8,$8),
+      ($1,$4,$7,'SIGNED_CONTRACT','Contrato assinado','COMPLETED','2026-09-18T12:00:00Z',$8,$8),
+      ($1,$5,$7,'DELIVERY_SCHEDULE','Agenda de entrega','PENDING',NULL,$8,NULL)`,
+    [tenantId, ...ids.obligations, ...ids.contracts, actorId],
   );
   await client.query(
     `INSERT INTO app.loads
