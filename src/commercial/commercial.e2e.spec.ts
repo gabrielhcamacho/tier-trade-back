@@ -226,6 +226,11 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
       status: 'CONVERTED', contractId: contract.contractId,
       approval: { id: approval.approvalId, status: 'APPROVED' },
     });
+    const confirmations = await server.inject({ method: 'GET', url: '/v1/offers', headers: identityHeaders });
+    expect(confirmations.json().items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: offer.offerId, status: 'CONVERTED', scenario_version: 2,
+        policy_version: 2, approval_status: 'APPROVED', contract_id: contract.contractId }),
+    ]));
 
     const summary = await server.inject({ method: 'GET', url: `/v1/contracts/${contract.contractId}/summary`, headers: identityHeaders });
     expect(summary.statusCode).toBe(200);
@@ -621,10 +626,19 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
         id: contract.contractId,
         counterparty_name: 'Cooperativa Teste do Cerrado',
         status: 'ACTIVE',
+        contract_version_number: expect.any(Number),
         load_count: 1,
+        open_load_count: 1,
+        received_load_count: 0,
         scheduled_weight_kg: '50000.000',
         available_weight_kg: '550000.000',
         pending_obligations: 1,
+        amendment_count: 0,
+        document_count: 2,
+        guarantee_count: 1,
+        signed_contract_count: 1,
+        pending_signature_count: 0,
+        signed_signature_count: 1,
       }],
     });
     const overviewAfterContract = await server.inject({ method: 'GET',

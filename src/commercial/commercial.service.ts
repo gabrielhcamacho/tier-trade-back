@@ -269,12 +269,19 @@ export class CommercialService {
         `SELECT o.id,o.status,o.commodity,o.unit,o.quantity_sc,
                 o.delivery_start::text,o.delivery_end::text,o.created_at::text,
                 cp.legal_name AS counterparty_name,
-                s.purchase_price_per_sc,s.projected_margin_per_sc
+                s.purchase_price_per_sc,s.projected_margin_per_sc,s.version AS scenario_version,
+                s.policy_version,a.status AS approval_status,c.id AS contract_id
            FROM app.offers o
            JOIN app.counterparties cp
              ON (cp.tenant_id,cp.id)=(o.tenant_id,o.counterparty_id)
            JOIN app.pricing_scenarios s
              ON (s.tenant_id,s.offer_id)=(o.tenant_id,o.id) AND s.is_current=true
+           LEFT JOIN LATERAL (
+             SELECT status FROM app.approvals
+              WHERE tenant_id=o.tenant_id AND offer_id=o.id
+              ORDER BY requested_at DESC,id DESC LIMIT 1
+           ) a ON true
+           LEFT JOIN app.contracts c ON (c.tenant_id,c.offer_id)=(o.tenant_id,o.id)
           WHERE o.tenant_id=$1
           ORDER BY o.created_at DESC,o.id DESC`, [tenantId]);
       return { tenant: { legalName: tenant.legal_name, isDemo: tenant.is_demo }, items: result.rows };
@@ -530,21 +537,41 @@ export class CommercialService {
                 cp.legal_name AS counterparty_name,
                 o.commodity,o.unit,o.quantity_sc,
                 o.delivery_start::text,o.delivery_end::text,
-                s.purchase_price_per_sc,s.projected_margin_per_sc,s.policy_version,
+                s.purchase_price_per_sc,s.total_costs_per_sc,s.projected_margin_per_sc,s.policy_version,
+                pct.external_number,
+                COALESCE(version_totals.contract_version_number,1)::integer AS contract_version_number,
                 COALESCE(load_totals.load_count,0)::integer AS load_count,
+                COALESCE(load_totals.open_load_count,0)::integer AS open_load_count,
+                COALESCE(load_totals.received_load_count,0)::integer AS received_load_count,
                 COALESCE(load_totals.scheduled_weight_kg,0)::numeric(20,3) AS scheduled_weight_kg,
                 COALESCE(load_totals.received_weight_kg,0)::numeric(20,3) AS received_weight_kg,
                 GREATEST(o.quantity_sc * 60 - COALESCE(load_totals.scheduled_weight_kg,0),0)::numeric(20,3)
                   AS available_weight_kg,
-                COALESCE(obligation_totals.pending_obligations,0)::integer AS pending_obligations
+                COALESCE(obligation_totals.pending_obligations,0)::integer AS pending_obligations,
+                COALESCE(amendment_totals.amendment_count,0)::integer AS amendment_count,
+                amendment_totals.latest_amendment_on::text,
+                COALESCE(document_totals.document_count,0)::integer AS document_count,
+                COALESCE(document_totals.guarantee_count,0)::integer AS guarantee_count,
+                COALESCE(document_totals.signed_contract_count,0)::integer AS signed_contract_count,
+                COALESCE(document_totals.pending_signature_count,0)::integer AS pending_signature_count,
+                COALESCE(document_totals.signed_signature_count,0)::integer AS signed_signature_count
            FROM app.contracts c
            JOIN app.offers o ON (o.tenant_id,o.id)=(c.tenant_id,c.offer_id)
            JOIN app.counterparties cp
              ON (cp.tenant_id,cp.id)=(o.tenant_id,o.counterparty_id)
            JOIN app.pricing_scenarios s
              ON (s.tenant_id,s.offer_id)=(o.tenant_id,o.id) AND s.is_current=true
+           LEFT JOIN app.purchase_contract_terms pct
+             ON (pct.tenant_id,pct.contract_id)=(c.tenant_id,c.id)
+           LEFT JOIN LATERAL (
+             SELECT max(v.version_number)::integer AS contract_version_number
+               FROM app.contract_versions v
+              WHERE v.tenant_id=c.tenant_id AND v.contract_id=c.id
+           ) version_totals ON true
            LEFT JOIN LATERAL (
              SELECT count(*)::integer AS load_count,
+                    count(*) FILTER (WHERE l.status IN ('SCHEDULED','IN_RECEIVING'))::integer AS open_load_count,
+                    count(*) FILTER (WHERE l.status='RECEIVED')::integer AS received_load_count,
                     COALESCE(sum(l.expected_weight_kg),0)::numeric(20,3) AS scheduled_weight_kg,
                     COALESCE(sum(r.net_weight_kg) FILTER (WHERE l.status='RECEIVED'),0)::numeric(20,3)
                       AS received_weight_kg
@@ -555,9 +582,29 @@ export class CommercialService {
            ) load_totals ON true
            LEFT JOIN LATERAL (
              SELECT count(*) FILTER (WHERE ob.status IN ('PENDING','IN_PROGRESS'))::integer AS pending_obligations
-               FROM app.contract_obligations ob
+              FROM app.contract_obligations ob
               WHERE ob.tenant_id=c.tenant_id AND ob.contract_id=c.id
            ) obligation_totals ON true
+           LEFT JOIN LATERAL (
+             SELECT count(*)::integer AS amendment_count,max(a.effective_on) AS latest_amendment_on
+               FROM app.contract_amendments a
+              WHERE a.tenant_id=c.tenant_id AND a.contract_id=c.id
+           ) amendment_totals ON true
+           LEFT JOIN LATERAL (
+             SELECT count(DISTINCT d.id)::integer AS document_count,
+                    count(DISTINCT d.id) FILTER (WHERE d.document_type='GUARANTEE' AND d.status='AVAILABLE')::integer
+                      AS guarantee_count,
+                    count(DISTINCT d.id) FILTER (WHERE d.document_type='SIGNED_CONTRACT' AND d.status='AVAILABLE')::integer
+                      AS signed_contract_count,
+                    count(DISTINCT ds.id) FILTER (WHERE ds.status IN ('PENDING','SENT'))::integer
+                      AS pending_signature_count,
+                    count(DISTINCT ds.id) FILTER (WHERE ds.status='SIGNED')::integer
+                      AS signed_signature_count
+               FROM app.documents d
+               LEFT JOIN app.document_signatures ds
+                 ON (ds.tenant_id,ds.document_id)=(d.tenant_id,d.id)
+              WHERE d.tenant_id=c.tenant_id AND d.aggregate_type='CONTRACT' AND d.aggregate_id=c.id
+           ) document_totals ON true
           WHERE c.tenant_id=$1
           ORDER BY c.activated_at DESC,c.id DESC`,
         [tenantId],
