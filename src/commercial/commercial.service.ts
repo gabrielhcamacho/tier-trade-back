@@ -5,6 +5,10 @@ import type { PoolClient } from 'pg';
 import { DatabasePlatformPort } from '../database/database.js';
 import { calculateProjectedMargin, decideSubmission } from '../domain/pricing.js';
 import type {
+  AttachContractObligationEvidenceInput,
+  CloseCommercialDemandInput,
+  CreateCommercialDemandInput,
+  CreateNegotiationEntryInput,
   CancelOfferInput,
   CreateContractObligationInput,
   CreateCounterpartyInput,
@@ -13,6 +17,7 @@ import type {
   PurchaseContractTermsInput,
   UpdateContractObligationInput,
   UpdateCounterpartyProfileInput,
+  UpdateCommercialDemandInput,
 } from './commercial.schemas.js';
 
 interface MarginPolicyRow {
@@ -79,6 +84,141 @@ export class CommercialService {
       }
       return { id: counterpartyId, legalName: counterparty.legal_name,
         taxId: counterparty.tax_id, partyType: input.partyType };
+    });
+  }
+
+  async listDemands(tenantId: string, actorId: string) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertMember(client, tenantId, actorId);
+      const [demands, counterparties] = await Promise.all([
+        client.query(
+          `SELECT d.id,d.counterparty_id,cp.legal_name AS counterparty_name,d.direction,d.commodity,
+                  d.unit,d.quantity_sc::text,d.delivery_start::text,d.delivery_end::text,
+                  d.indicative_price_per_sc::text,d.description,d.status,d.version,
+                  d.created_at::text,d.updated_at::text,d.close_reason,
+                  (SELECT count(*)::integer FROM app.commercial_negotiation_entries n
+                    WHERE n.tenant_id=d.tenant_id AND n.demand_id=d.id) AS negotiation_count
+             FROM app.commercial_demands d
+             JOIN app.counterparties cp ON (cp.tenant_id,cp.id)=(d.tenant_id,d.counterparty_id)
+            WHERE d.tenant_id=$1 ORDER BY d.created_at DESC,d.id DESC LIMIT 501`, [tenantId]),
+        client.query('SELECT id,legal_name,party_type FROM app.counterparties WHERE tenant_id=$1 ORDER BY legal_name,id', [tenantId]),
+      ]);
+      return { items: demands.rows.slice(0, 500), hasMore: demands.rows.length > 500,
+        counterparties: counterparties.rows };
+    });
+  }
+
+  async demandDetail(tenantId: string, actorId: string, demandId: string) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertMember(client, tenantId, actorId);
+      const demand = await client.query(
+        `SELECT d.id,d.counterparty_id,cp.legal_name AS counterparty_name,d.direction,d.commodity,
+                d.unit,d.quantity_sc::text,d.delivery_start::text,d.delivery_end::text,
+                d.indicative_price_per_sc::text,d.description,d.status,d.version,
+                d.created_at::text,d.updated_at::text,d.close_reason,d.closed_at::text
+           FROM app.commercial_demands d
+           JOIN app.counterparties cp ON (cp.tenant_id,cp.id)=(d.tenant_id,d.counterparty_id)
+          WHERE d.tenant_id=$1 AND d.id=$2`, [tenantId, demandId]);
+      if (!demand.rows[0]) throw new NotFoundException({ code: 'COMMERCIAL_DEMAND_NOT_FOUND' });
+      const entries = await client.query(
+        `SELECT id,note,indicative_price_per_sc::text,created_by,created_at::text
+           FROM app.commercial_negotiation_entries
+          WHERE tenant_id=$1 AND demand_id=$2 ORDER BY created_at DESC,id DESC`, [tenantId, demandId]);
+      return { demand: demand.rows[0], negotiations: entries.rows };
+    });
+  }
+
+  async createDemand(tenantId: string, actorId: string, input: CreateCommercialDemandInput) {
+    this.assertDemandWindow(input);
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'COMMERCIAL_EDIT');
+      await this.assertClassifiedCounterparty(client, tenantId, input.counterpartyId);
+      const id = randomUUID();
+      await client.query(
+        `INSERT INTO app.commercial_demands
+          (tenant_id,id,counterparty_id,direction,commodity,unit,quantity_sc,delivery_start,
+           delivery_end,indicative_price_per_sc,description,created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [tenantId, id, input.counterpartyId, input.direction, input.commodity, input.unit,
+          input.quantitySc, input.deliveryStart, input.deliveryEnd, input.indicativePricePerSc,
+          input.description, actorId],
+      );
+      await this.record(client, tenantId, actorId, 'commercial.demand.created', 'commercial_demand', id,
+        { direction: input.direction, commodity: input.commodity, counterpartyId: input.counterpartyId });
+      return { id, status: 'OPEN', version: 1 };
+    });
+  }
+
+  async updateDemand(tenantId: string, actorId: string, demandId: string, input: UpdateCommercialDemandInput) {
+    this.assertDemandWindow(input);
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'COMMERCIAL_EDIT');
+      const current = await client.query(
+        'SELECT * FROM app.commercial_demands WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [tenantId, demandId]);
+      if (!current.rows[0]) throw new NotFoundException({ code: 'COMMERCIAL_DEMAND_NOT_FOUND' });
+      if (current.rows[0].status !== 'OPEN') throw new ConflictException({ code: 'COMMERCIAL_DEMAND_CLOSED' });
+      if (current.rows[0].version !== input.expectedVersion) {
+        throw new ConflictException({ code: 'COMMERCIAL_DEMAND_VERSION_CONFLICT' });
+      }
+      await this.assertClassifiedCounterparty(client, tenantId, input.counterpartyId);
+      const result = await client.query<{ version: number }>(
+        `UPDATE app.commercial_demands
+            SET counterparty_id=$3,direction=$4,commodity=$5,unit=$6,quantity_sc=$7,
+                delivery_start=$8,delivery_end=$9,indicative_price_per_sc=$10,
+                description=$11,version=version+1,updated_at=now()
+          WHERE tenant_id=$1 AND id=$2 RETURNING version`,
+        [tenantId, demandId, input.counterpartyId, input.direction, input.commodity,
+          input.unit, input.quantitySc, input.deliveryStart, input.deliveryEnd,
+          input.indicativePricePerSc, input.description],
+      );
+      await this.record(client, tenantId, actorId, 'commercial.demand.updated', 'commercial_demand', demandId,
+        { before: current.rows[0], after: input, version: result.rows[0]?.version });
+      return { id: demandId, status: 'OPEN', version: result.rows[0]?.version };
+    });
+  }
+
+  async closeDemand(tenantId: string, actorId: string, demandId: string, input: CloseCommercialDemandInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'COMMERCIAL_EDIT');
+      const result = await client.query<{ version: number }>(
+        `UPDATE app.commercial_demands
+            SET status='CLOSED',close_reason=$3,closed_by=$4,closed_at=now(),
+                updated_at=now(),version=version+1
+          WHERE tenant_id=$1 AND id=$2 AND status='OPEN' RETURNING version`,
+        [tenantId, demandId, input.reason, actorId],
+      );
+      if (!result.rows[0]) {
+        const exists = await client.query('SELECT status FROM app.commercial_demands WHERE tenant_id=$1 AND id=$2',
+          [tenantId, demandId]);
+        if (!exists.rows[0]) throw new NotFoundException({ code: 'COMMERCIAL_DEMAND_NOT_FOUND' });
+        throw new ConflictException({ code: 'COMMERCIAL_DEMAND_CLOSED' });
+      }
+      await this.record(client, tenantId, actorId, 'commercial.demand.closed', 'commercial_demand', demandId,
+        { reason: input.reason, version: result.rows[0].version });
+      return { id: demandId, status: 'CLOSED', version: result.rows[0].version };
+    });
+  }
+
+  async addNegotiationEntry(tenantId: string, actorId: string, demandId: string,
+    input: CreateNegotiationEntryInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'COMMERCIAL_EDIT');
+      const demand = await client.query<{ status: string }>(
+        'SELECT status FROM app.commercial_demands WHERE tenant_id=$1 AND id=$2 FOR UPDATE',
+        [tenantId, demandId]);
+      if (!demand.rows[0]) throw new NotFoundException({ code: 'COMMERCIAL_DEMAND_NOT_FOUND' });
+      if (demand.rows[0].status !== 'OPEN') throw new ConflictException({ code: 'COMMERCIAL_DEMAND_CLOSED' });
+      const id = randomUUID();
+      const result = await client.query(
+        `INSERT INTO app.commercial_negotiation_entries
+          (tenant_id,id,demand_id,note,indicative_price_per_sc,created_by)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         RETURNING id,note,indicative_price_per_sc::text,created_by,created_at::text`,
+        [tenantId, id, demandId, input.note, input.indicativePricePerSc, actorId],
+      );
+      await this.record(client, tenantId, actorId, 'commercial.negotiation.recorded', 'commercial_demand', demandId,
+        { entryId: id, ...input });
+      return result.rows[0];
     });
   }
 
@@ -466,7 +606,19 @@ export class CommercialService {
                   'status', ob.status,
                   'completed_at', ob.completed_at,
                   'created_at', ob.created_at,
-                  'updated_at', ob.updated_at
+                  'updated_at', ob.updated_at,
+                  'evidence', COALESCE((
+                    SELECT jsonb_agg(jsonb_build_object(
+                      'documentId', ev.document_id,
+                      'fileName', doc.file_name,
+                      'documentType', doc.document_type,
+                      'status', doc.status,
+                      'linkedAt', ev.linked_at
+                    ) ORDER BY ev.linked_at, ev.document_id)
+                    FROM app.contract_obligation_evidence ev
+                    JOIN app.documents doc ON (doc.tenant_id,doc.id)=(ev.tenant_id,ev.document_id)
+                    WHERE ev.tenant_id=ob.tenant_id AND ev.obligation_id=ob.id
+                  ),'[]'::jsonb)
                 ) ORDER BY ob.due_date NULLS LAST, ob.created_at, ob.id)
                   FILTER (WHERE ob.id IS NOT NULL), '[]'::jsonb) AS obligations
            FROM app.contracts c
@@ -630,6 +782,37 @@ export class CommercialService {
     });
   }
 
+  async attachContractObligationEvidence(tenantId: string, actorId: string, contractId: string,
+    obligationId: string, input: AttachContractObligationEvidenceInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'COMMERCIAL_EDIT');
+      const obligation = await client.query<{ id: string }>(
+        `SELECT ob.id FROM app.contract_obligations ob
+         JOIN app.contracts c ON (c.tenant_id,c.id)=(ob.tenant_id,ob.contract_id)
+         WHERE ob.tenant_id=$1 AND ob.contract_id=$2 AND ob.id=$3 AND c.status='ACTIVE'`,
+        [tenantId, contractId, obligationId],
+      );
+      if (!obligation.rows[0]) throw new NotFoundException({ code: 'CONTRACT_OBLIGATION_NOT_FOUND' });
+      const document = await client.query<{ id: string }>(
+        `SELECT id FROM app.documents WHERE tenant_id=$1 AND id=$2
+          AND aggregate_type='CONTRACT' AND aggregate_id=$3 AND status='AVAILABLE'`,
+        [tenantId, input.documentId, contractId],
+      );
+      if (!document.rows[0]) throw new UnprocessableEntityException({ code: 'CONTRACT_EVIDENCE_NOT_AVAILABLE' });
+      const inserted = await client.query(
+        `INSERT INTO app.contract_obligation_evidence
+          (tenant_id,obligation_id,document_id,linked_by) VALUES ($1,$2,$3,$4)
+         ON CONFLICT DO NOTHING RETURNING document_id`,
+        [tenantId, obligationId, input.documentId, actorId],
+      );
+      if (inserted.rowCount) {
+        await this.record(client, tenantId, actorId, 'contract.obligation.evidence_linked',
+          'contract', contractId, { obligationId, documentId: input.documentId });
+      }
+      return { obligationId, documentId: input.documentId, linked: Boolean(inserted.rowCount) };
+    });
+  }
+
   private async assertMember(client: PoolClient, tenantId: string, actorId: string) {
     const result = await client.query(
       `SELECT 1 FROM app.memberships WHERE tenant_id=$1 AND user_id=$2 AND active=true`, [tenantId, actorId]);
@@ -644,6 +827,12 @@ export class CommercialService {
   }
 
   private assertDeliveryWindow(input: CreateOfferInput) {
+    if (input.deliveryEnd < input.deliveryStart) {
+      throw new UnprocessableEntityException({ code: 'INVALID_DELIVERY_WINDOW' });
+    }
+  }
+
+  private assertDemandWindow(input: CreateCommercialDemandInput) {
     if (input.deliveryEnd < input.deliveryStart) {
       throw new UnprocessableEntityException({ code: 'INVALID_DELIVERY_WINDOW' });
     }

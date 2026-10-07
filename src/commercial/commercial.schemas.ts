@@ -70,6 +70,9 @@ export type UpdateCounterpartyProfileInput = z.infer<typeof updateCounterpartyPr
 export type CreateContractObligationInput = z.infer<typeof createContractObligationSchema>;
 export type UpdateContractObligationInput = z.infer<typeof updateContractObligationSchema>;
 
+export const attachContractObligationEvidenceSchema = z.object({ documentId: z.uuid() });
+export type AttachContractObligationEvidenceInput = z.infer<typeof attachContractObligationEvidenceSchema>;
+
 export const purchaseContractTermsSchema = z.object({
   expectedVersion: z.number().int().nonnegative(),
   externalNumber: z.string().trim().min(1).max(80),
@@ -85,3 +88,28 @@ export const purchaseContractTermsSchema = z.object({
 });
 
 export type PurchaseContractTermsInput = z.infer<typeof purchaseContractTermsSchema>;
+
+const demandDetails = {
+  counterpartyId: z.uuid(),
+  direction: z.enum(['PURCHASE', 'SALE']),
+  commodity: commoditySchema,
+  unit: z.literal('SC_60KG'),
+  quantitySc: decimalString.refine((value) => Number(value) > 0, 'Quantity must be greater than zero.'),
+  deliveryStart: localDate,
+  deliveryEnd: localDate,
+  indicativePricePerSc: decimalString.nullable(),
+  description: z.string().trim().min(3).max(1000).nullable(),
+};
+
+export const createCommercialDemandSchema = z.object(demandDetails);
+export const updateCommercialDemandSchema = z.object({ ...demandDetails, expectedVersion: z.number().int().positive() });
+export const closeCommercialDemandSchema = z.object({ reason: z.string().trim().min(3).max(500) });
+export const createNegotiationEntrySchema = z.object({
+  note: z.string().trim().min(3).max(1000),
+  indicativePricePerSc: decimalString.nullable(),
+});
+
+export type CreateCommercialDemandInput = z.infer<typeof createCommercialDemandSchema>;
+export type UpdateCommercialDemandInput = z.infer<typeof updateCommercialDemandSchema>;
+export type CloseCommercialDemandInput = z.infer<typeof closeCommercialDemandSchema>;
+export type CreateNegotiationEntryInput = z.infer<typeof createNegotiationEntrySchema>;

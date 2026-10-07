@@ -36,6 +36,11 @@ export class InventoryController {
     return this.service.position(identity.tenantId, identity.actorId);
   }
 
+  @Get('sales-contracts')
+  salesPortfolio(@Identity() identity: RequestIdentity) {
+    return this.service.salesPortfolio(identity.tenantId, identity.actorId);
+  }
+
   @Post('sales-contracts')
   createSalesContract(@Identity() identity: RequestIdentity,
     @Body(new SchemaPipe(salesContractSchema)) input: SalesContractInput) {

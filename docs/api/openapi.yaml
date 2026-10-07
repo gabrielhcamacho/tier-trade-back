@@ -123,6 +123,45 @@ paths:
       responses:
         '200': { description: Perfil confirmado e auditado }
         '422': { description: Perfil incompatível com documento existente }
+  /v1/commercial/demands:
+    get:
+      summary: Lista demandas comerciais e contrapartes do tenant autenticado
+      responses:
+        '200': { description: Até 500 demandas; hasMore indica paginação futura }
+    post:
+      summary: Registra uma demanda preliminar de compra ou venda sem impacto financeiro
+      responses:
+        '201': { description: Demanda aberta, versionada e auditada }
+        '422': { description: Janela de entrega inválida ou contraparte não classificada }
+  /v1/commercial/demands/{demandId}:
+    parameters:
+      - { name: demandId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      summary: Exibe demanda e histórico imutável de negociações
+      responses:
+        '200': { description: Demanda e histórico do tenant }
+        '404': { description: Demanda ausente no tenant }
+    put:
+      summary: Edita demanda aberta com expectedVersion obrigatório
+      responses:
+        '200': { description: Nova versão auditada }
+        '409': { description: Demanda encerrada ou versão divergente }
+  /v1/commercial/demands/{demandId}/negotiations:
+    parameters:
+      - { name: demandId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: Acrescenta nota e preço apenas indicativo ao histórico da demanda
+      responses:
+        '201': { description: Registro imutável e auditado }
+        '409': { description: Demanda encerrada }
+  /v1/commercial/demands/{demandId}/close:
+    parameters:
+      - { name: demandId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      summary: Encerra demanda com motivo, sem converter automaticamente em oferta ou contrato
+      responses:
+        '201': { description: Demanda encerrada e auditada }
+        '409': { description: Demanda já encerrada }
   /v1/offers:
     get:
       summary: Lista ofertas do tenant autenticado com cenário vigente
@@ -220,6 +259,20 @@ paths:
       responses:
         '200': { description: Obrigação atualizada e auditada }
         '404': { description: Obrigação ou permissão não encontrada no tenant }
+  /v1/contracts/{contractId}/obligations/{obligationId}/evidence:
+    post:
+      summary: Vincula um documento privado disponível à obrigação contratual
+      description: Exige COMMERCIAL_EDIT. O documento deve pertencer ao mesmo contrato e tenant. O vínculo é imutável, idempotente e auditado quando criado; não conclui a obrigação automaticamente.
+      parameters:
+        - { name: contractId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: obligationId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [documentId], properties: { documentId: { type: string, format: uuid } } } } }
+      responses:
+        '201': { description: Vínculo criado ou já existente }
+        '404': { description: Obrigação ou permissão não encontrada no tenant }
+        '422': { description: Documento indisponível ou não pertencente ao contrato }
   /v1/contracts/{contractId}/loads:
     get:
       summary: Lista a agenda e os saldos físicos do contrato
@@ -292,6 +345,12 @@ paths:
       responses:
         '200': { description: Saldos físicos, lotes e movimentos calculados no backend }
   /v1/inventory/sales-contracts:
+    get:
+      summary: Lista contratos de venda e contrapartes do tenant para a carteira comercial
+      description: Exige vínculo ativo. Não carrega lotes ou movimentos do estoque.
+      responses:
+        '200': { description: Carteira de venda com saldos alocados e expedidos }
+        '404': { description: Vínculo ativo não encontrado }
     post:
       summary: Cria um contrato de venda ativo
       requestBody:

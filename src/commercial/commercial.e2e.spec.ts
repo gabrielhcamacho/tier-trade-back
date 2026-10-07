@@ -62,6 +62,9 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     await setup.query(await readFile(new URL('../../supabase/migrations/20261005161634_demo_reset_operational_completeness.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261005213800_contract_obligation_workflow.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261007205930_purchase_contract_terms.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261007213335_contract_obligation_evidence.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261007214032_commercial_demands_negotiations.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261007214736_cover_commercial_actor_foreign_keys_and_terms_rls.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../scripts/seed-local.sql', import.meta.url), 'utf8'));
     await setup.end();
 
@@ -78,6 +81,51 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
 
   afterAll(async () => {
     await app?.close();
+  });
+
+  it('records tenant-scoped demands and an immutable negotiation history without financial effects', async () => {
+    const server = app.getHttpAdapter().getInstance();
+    const cp = await server.inject({ method: 'POST', url: '/v1/counterparties', headers: identityHeaders,
+      payload: { legalName: 'Cliente das Demandas Ltda', taxId: '88123456000199', partyType: 'COMPANY' } });
+    expect(cp.statusCode, cp.body).toBe(201);
+    const input = { counterpartyId: cp.json().id, direction: 'SALE', commodity: 'SOJA', unit: 'SC_60KG',
+      quantitySc: '3000.000', deliveryStart: '2026-12-01', deliveryEnd: '2026-12-31',
+      indicativePricePerSc: '125.50', description: 'Consulta preliminar, sem aceite comercial.' };
+    const invalid = await server.inject({ method: 'POST', url: '/v1/commercial/demands', headers: identityHeaders,
+      payload: { ...input, deliveryEnd: '2026-11-30' } });
+    expect(invalid.statusCode).toBe(422);
+    const created = await server.inject({ method: 'POST', url: '/v1/commercial/demands', headers: identityHeaders,
+      payload: input });
+    expect(created.statusCode, created.body).toBe(201);
+    const id = created.json().id as string;
+    const listed = await server.inject({ method: 'GET', url: '/v1/commercial/demands', headers: identityHeaders });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json().items).toEqual(expect.arrayContaining([expect.objectContaining({ id,
+      counterparty_name: cp.json().legalName, quantity_sc: '3000.000000', status: 'OPEN' })]));
+    const note = await server.inject({ method: 'POST', url: `/v1/commercial/demands/${id}/negotiations`,
+      headers: identityHeaders, payload: { note: 'Cliente pediu janela para dezembro.', indicativePricePerSc: '124.00' } });
+    expect(note.statusCode, note.body).toBe(201);
+    const detail = await server.inject({ method: 'GET', url: `/v1/commercial/demands/${id}`, headers: identityHeaders });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().negotiations).toEqual([expect.objectContaining({ id: note.json().id,
+      indicative_price_per_sc: '124.000000' })]);
+    const changed = await server.inject({ method: 'PUT', url: `/v1/commercial/demands/${id}`, headers: identityHeaders,
+      payload: { ...input, quantitySc: '3200.000', expectedVersion: 1 } });
+    expect(changed.statusCode, changed.body).toBe(200);
+    expect(changed.json().version).toBe(2);
+    const stale = await server.inject({ method: 'PUT', url: `/v1/commercial/demands/${id}`, headers: identityHeaders,
+      payload: { ...input, expectedVersion: 1 } });
+    expect(stale.statusCode).toBe(409);
+    const isolated = await server.inject({ method: 'GET', url: `/v1/commercial/demands/${id}`,
+      headers: { ...identityHeaders, 'x-tenant-id': '99999999-9999-4999-8999-999999999999' } });
+    expect(isolated.statusCode).toBe(404);
+    const closed = await server.inject({ method: 'POST', url: `/v1/commercial/demands/${id}/close`,
+      headers: identityHeaders, payload: { reason: 'Consulta encerrada sem contratação.' } });
+    expect(closed.statusCode, closed.body).toBe(201);
+    expect(closed.json().status).toBe('CLOSED');
+    const afterClose = await server.inject({ method: 'POST', url: `/v1/commercial/demands/${id}/negotiations`,
+      headers: identityHeaders, payload: { note: 'Tentativa após encerramento.', indicativePricePerSc: null } });
+    expect(afterClose.statusCode).toBe(409);
   });
 
   it('serves the tenant-scoped overview and rejects unmodeled filters', async () => {
@@ -244,6 +292,43 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
       responsible_name: 'Equipe de contratos', status: 'PENDING',
     });
     const obligationId = createdObligation.json().id as string;
+    const evidenceId = randomUUID();
+    const foreignDocumentId = randomUUID();
+    const evidenceSetup = new Pool({ connectionString: databaseUrl });
+    await evidenceSetup.query(
+      `INSERT INTO app.documents
+       (tenant_id,id,aggregate_type,aggregate_id,document_type,file_name,mime_type,size_bytes,
+        storage_path,status,uploaded_at,created_by)
+       VALUES ($1,$2,'CONTRACT',$3,'GUARANTEE','garantia-teste.pdf','application/pdf',100,
+               $4,'AVAILABLE',now(),$5),
+              ($1,$6,'CONTRACT',$7,'GUARANTEE','outro-contrato.pdf','application/pdf',100,
+               $8,'AVAILABLE',now(),$5)`,
+      [identityHeaders['x-tenant-id'], evidenceId, contract.contractId, `test/${evidenceId}`,
+        identityHeaders['x-actor-id'], foreignDocumentId, randomUUID(), `test/${foreignDocumentId}`],
+    );
+    await evidenceSetup.end();
+    const wrongEvidence = await server.inject({
+      method: 'POST', url: `/v1/contracts/${contract.contractId}/obligations/${obligationId}/evidence`,
+      headers: identityHeaders, payload: { documentId: foreignDocumentId },
+    });
+    expect(wrongEvidence.statusCode).toBe(422);
+    const linkedEvidence = await server.inject({
+      method: 'POST', url: `/v1/contracts/${contract.contractId}/obligations/${obligationId}/evidence`,
+      headers: identityHeaders, payload: { documentId: evidenceId },
+    });
+    expect(linkedEvidence.statusCode, linkedEvidence.body).toBe(201);
+    expect(linkedEvidence.json()).toMatchObject({ obligationId, documentId: evidenceId, linked: true });
+    const duplicateEvidence = await server.inject({
+      method: 'POST', url: `/v1/contracts/${contract.contractId}/obligations/${obligationId}/evidence`,
+      headers: identityHeaders, payload: { documentId: evidenceId },
+    });
+    expect(duplicateEvidence.json()).toMatchObject({ linked: false });
+    const isolatedEvidence = await server.inject({
+      method: 'POST', url: `/v1/contracts/${contract.contractId}/obligations/${obligationId}/evidence`,
+      headers: { ...identityHeaders, 'x-tenant-id': '99999999-9999-4999-8999-999999999999' },
+      payload: { documentId: evidenceId },
+    });
+    expect(isolatedEvidence.statusCode).toBe(404);
     const openObligations = await server.inject({
       method: 'GET', url: '/v1/contracts/obligations/open', headers: identityHeaders,
     });
@@ -297,6 +382,7 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
       expect.objectContaining({
         id: obligationId, title: obligationInput.title, due_date: obligationInput.dueDate,
         responsible_name: obligationInput.responsibleName, status: 'CANCELLED',
+        evidence: [expect.objectContaining({ documentId: evidenceId, fileName: 'garantia-teste.pdf' })],
       }),
     ]));
 
@@ -565,9 +651,9 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
 
     const processor = app.get(OutboxProcessor);
     const firstPass = await processor.processTenant(identityHeaders['x-tenant-id']);
-    expect(firstPass).toMatchObject({ claimed: 25, published: 25, failed: 0, recovered: 0, pending: 0 });
+    expect(firstPass).toMatchObject({ claimed: 25, published: 25, failed: 0, recovered: 0, pending: 6 });
     expect(await processor.processTenant(identityHeaders['x-tenant-id'])).toMatchObject({
-      claimed: 0, published: 0, failed: 0, recovered: 0, pending: 0,
+      claimed: 6, published: 6, failed: 0, recovered: 0, pending: 0,
     });
 
     const verification = new Pool({ connectionString: databaseUrl });
@@ -588,7 +674,7 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
         WHERE tenant_id=$1 AND aggregate_id=$2 AND event_type='offer.cancelled'`,
       [identityHeaders['x-tenant-id'], cancellableOffer.offerId],
     );
-    expect(activity.rows[0]?.count).toBe('25');
+    expect(activity.rows[0]?.count).toBe('31');
     expect(projection.rows[0]?.projected_margin_per_sc).toBe('3.000000');
     expect(projection.rows[0]?.obligations).toHaveLength(3);
     expect(cancellationAudit.rows[0]?.payload).toEqual({

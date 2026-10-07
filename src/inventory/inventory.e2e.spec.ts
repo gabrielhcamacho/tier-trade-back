@@ -95,6 +95,15 @@ describe.runIf(Boolean(databaseUrl))('sales fulfillment and inventory ledger', (
     });
     expect(sale.statusCode, sale.body).toBe(201);
 
+    const salesPortfolio = await server.inject({ method: 'GET', url: '/v1/inventory/sales-contracts', headers });
+    expect(salesPortfolio.statusCode, salesPortfolio.body).toBe(200);
+    expect(salesPortfolio.json().items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: sale.json().id, reference: 'CV-2026-0043', commodity: 'MILHO' }),
+    ]));
+    expect(salesPortfolio.json().counterparties).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'd1000000-0000-4000-8000-000000000005' }),
+    ]));
+
     const firstVersion = await server.inject({
       method: 'GET', url: `/v1/inventory/sales-contracts/${sale.json().id}/versions`, headers,
     });

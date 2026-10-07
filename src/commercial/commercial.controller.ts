@@ -4,19 +4,29 @@ import { Identity, type RequestIdentity, RequestIdentityGuard } from '../auth/re
 import { SchemaPipe } from '../common/schema.pipe.js';
 import {
   cancelOfferSchema,
+  attachContractObligationEvidenceSchema,
+  closeCommercialDemandSchema,
+  createCommercialDemandSchema,
+  createNegotiationEntrySchema,
   createContractObligationSchema,
   createCounterpartySchema,
   createOfferSchema,
   marginPolicySchema,
+  updateCommercialDemandSchema,
   purchaseContractTermsSchema,
   updateContractObligationSchema,
   updateCounterpartyProfileSchema,
   type CancelOfferInput,
+  type AttachContractObligationEvidenceInput,
+  type CloseCommercialDemandInput,
+  type CreateCommercialDemandInput,
+  type CreateNegotiationEntryInput,
   type CreateContractObligationInput,
   type CreateCounterpartyInput,
   type CreateOfferInput,
   type MarginPolicyInput,
   type PurchaseContractTermsInput,
+  type UpdateCommercialDemandInput,
   type UpdateContractObligationInput,
   type UpdateCounterpartyProfileInput,
 } from './commercial.schemas.js';
@@ -45,6 +55,40 @@ export class CommercialController {
     @Param('counterpartyId', ParseUUIDPipe) counterpartyId: string,
     @Body(new SchemaPipe(updateCounterpartyProfileSchema)) input: UpdateCounterpartyProfileInput) {
     return this.service.updateCounterpartyProfile(identity.tenantId, identity.actorId, counterpartyId, input);
+  }
+
+  @Get('commercial/demands')
+  demands(@Identity() identity: RequestIdentity) {
+    return this.service.listDemands(identity.tenantId, identity.actorId);
+  }
+
+  @Post('commercial/demands')
+  createDemand(@Identity() identity: RequestIdentity,
+    @Body(new SchemaPipe(createCommercialDemandSchema)) input: CreateCommercialDemandInput) {
+    return this.service.createDemand(identity.tenantId, identity.actorId, input);
+  }
+
+  @Get('commercial/demands/:demandId')
+  demandDetail(@Identity() identity: RequestIdentity, @Param('demandId', ParseUUIDPipe) demandId: string) {
+    return this.service.demandDetail(identity.tenantId, identity.actorId, demandId);
+  }
+
+  @Put('commercial/demands/:demandId')
+  updateDemand(@Identity() identity: RequestIdentity, @Param('demandId', ParseUUIDPipe) demandId: string,
+    @Body(new SchemaPipe(updateCommercialDemandSchema)) input: UpdateCommercialDemandInput) {
+    return this.service.updateDemand(identity.tenantId, identity.actorId, demandId, input);
+  }
+
+  @Post('commercial/demands/:demandId/close')
+  closeDemand(@Identity() identity: RequestIdentity, @Param('demandId', ParseUUIDPipe) demandId: string,
+    @Body(new SchemaPipe(closeCommercialDemandSchema)) input: CloseCommercialDemandInput) {
+    return this.service.closeDemand(identity.tenantId, identity.actorId, demandId, input);
+  }
+
+  @Post('commercial/demands/:demandId/negotiations')
+  addNegotiation(@Identity() identity: RequestIdentity, @Param('demandId', ParseUUIDPipe) demandId: string,
+    @Body(new SchemaPipe(createNegotiationEntrySchema)) input: CreateNegotiationEntryInput) {
+    return this.service.addNegotiationEntry(identity.tenantId, identity.actorId, demandId, input);
   }
 
   @Post('offers')
@@ -129,6 +173,16 @@ export class CommercialController {
     @Param('obligationId', ParseUUIDPipe) obligationId: string,
     @Body(new SchemaPipe(updateContractObligationSchema)) input: UpdateContractObligationInput) {
     return this.service.updateContractObligation(
+      identity.tenantId, identity.actorId, contractId, obligationId, input,
+    );
+  }
+
+  @Post('contracts/:contractId/obligations/:obligationId/evidence')
+  attachObligationEvidence(@Identity() identity: RequestIdentity,
+    @Param('contractId', ParseUUIDPipe) contractId: string,
+    @Param('obligationId', ParseUUIDPipe) obligationId: string,
+    @Body(new SchemaPipe(attachContractObligationEvidenceSchema)) input: AttachContractObligationEvidenceInput) {
+    return this.service.attachContractObligationEvidence(
       identity.tenantId, identity.actorId, contractId, obligationId, input,
     );
   }

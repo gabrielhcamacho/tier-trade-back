@@ -50,6 +50,26 @@ interface MovementRow {
   created_at: Date;
 }
 
+const salesContractsSql = `SELECT sc.id,sc.counterparty_id,sc.reference,sc.commodity,sc.quantity_kg::text,
+    sc.sale_price_per_kg::text,sc.destination_code,sc.delivery_start::text,sc.delivery_end::text,
+    sc.required_documents,sc.payment_term_days,sc.status,cp.legal_name AS counterparty_name,
+    COALESCE(a.allocated_kg,0)::text AS allocated_kg,
+    COALESCE(a.dispatched_kg,0)::text AS dispatched_kg
+  FROM app.sales_contracts sc
+  JOIN app.counterparties cp ON (cp.tenant_id,cp.id)=(sc.tenant_id,sc.counterparty_id)
+  LEFT JOIN LATERAL (
+    SELECT COALESCE(sum(x.quantity_kg) FILTER (WHERE x.status<>'RELEASED'),0)::numeric(20,3) AS allocated_kg,
+           COALESCE(sum(x.dispatched_kg),0)::numeric(20,3) AS dispatched_kg
+      FROM (
+        SELECT ia.quantity_kg,ia.status,COALESCE(sum(id.quantity_kg),0)::numeric(20,3) AS dispatched_kg
+          FROM app.inventory_allocations ia
+          LEFT JOIN app.inventory_dispatches id ON (id.tenant_id,id.allocation_id)=(ia.tenant_id,ia.id)
+         WHERE ia.tenant_id=sc.tenant_id AND ia.sales_contract_id=sc.id
+         GROUP BY ia.id,ia.quantity_kg,ia.status
+      ) x
+  ) a ON true
+ WHERE sc.tenant_id=$1 ORDER BY sc.created_at DESC,sc.id DESC`;
+
 @Injectable()
 export class InventoryService extends InventoryReceiptPort {
   constructor(
@@ -135,27 +155,7 @@ export class InventoryService extends InventoryReceiptPort {
         (total, row) => total.plus(row.committed_kg), new Decimal(0));
       const blocked = lots.rows.filter((row) => row.status !== 'AVAILABLE')
         .reduce((total, row) => total.plus(row.quantity_kg), new Decimal(0));
-      const salesContracts = await client.query(
-        `SELECT sc.id,sc.counterparty_id,sc.reference,sc.commodity,sc.quantity_kg::text,sc.sale_price_per_kg::text,
-                sc.destination_code,sc.delivery_start::text,sc.delivery_end::text,
-                sc.required_documents,sc.payment_term_days,sc.status,cp.legal_name AS counterparty_name,
-                COALESCE(a.allocated_kg,0)::text AS allocated_kg,
-                COALESCE(a.dispatched_kg,0)::text AS dispatched_kg
-           FROM app.sales_contracts sc
-           JOIN app.counterparties cp ON (cp.tenant_id,cp.id)=(sc.tenant_id,sc.counterparty_id)
-           LEFT JOIN LATERAL (
-             SELECT COALESCE(sum(x.quantity_kg) FILTER (WHERE x.status<>'RELEASED'),0)::numeric(20,3) AS allocated_kg,
-                    COALESCE(sum(x.dispatched_kg),0)::numeric(20,3) AS dispatched_kg
-               FROM (
-                 SELECT ia.quantity_kg,ia.status,COALESCE(sum(id.quantity_kg),0)::numeric(20,3) AS dispatched_kg
-                   FROM app.inventory_allocations ia
-                   LEFT JOIN app.inventory_dispatches id
-                     ON (id.tenant_id,id.allocation_id)=(ia.tenant_id,ia.id)
-                  WHERE ia.tenant_id=sc.tenant_id AND ia.sales_contract_id=sc.id
-                  GROUP BY ia.id,ia.quantity_kg,ia.status
-               ) x
-           ) a ON true
-          WHERE sc.tenant_id=$1 ORDER BY sc.created_at DESC,sc.id DESC`, [tenantId]);
+      const salesContracts = await client.query(salesContractsSql, [tenantId]);
       const allocations = await client.query(
         `SELECT a.id,a.sales_contract_id,a.lot_id,a.quantity_kg::text,a.status,a.created_at,
                 sc.reference AS contract_reference,lot.lot_code,
@@ -265,6 +265,17 @@ export class InventoryService extends InventoryReceiptPort {
         lotEvents: lotEvents.rows,
         counts: counts.rows,
       };
+    });
+  }
+
+  salesPortfolio(tenantId: string, actorId: string) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertMember(client, tenantId, actorId);
+      const [contracts, counterparties] = await Promise.all([
+        client.query(salesContractsSql, [tenantId]),
+        client.query(`SELECT id,legal_name FROM app.counterparties WHERE tenant_id=$1 ORDER BY legal_name,id`, [tenantId]),
+      ]);
+      return { items: contracts.rows, counterparties: counterparties.rows };
     });
   }
 
