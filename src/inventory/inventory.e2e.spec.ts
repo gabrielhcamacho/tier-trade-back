@@ -1,5 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
+import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -53,6 +54,11 @@ describe.runIf(Boolean(databaseUrl))('sales fulfillment and inventory ledger', (
       '20261005160901_cover_operational_completeness_foreign_keys.sql',
       '20261005161634_demo_reset_operational_completeness.sql',
       '20261005213800_contract_obligation_workflow.sql',
+      '20261007205930_purchase_contract_terms.sql',
+      '20261007213335_contract_obligation_evidence.sql',
+      '20261007214032_commercial_demands_negotiations.sql',
+      '20261007214736_cover_commercial_actor_foreign_keys_and_terms_rls.sql',
+      '20261007222434_contract_lifecycle_and_version_references.sql',
     ];
     for (const migration of migrations) {
       await setup.query(await readFile(new URL(`../../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
@@ -98,7 +104,7 @@ describe.runIf(Boolean(databaseUrl))('sales fulfillment and inventory ledger', (
     const salesPortfolio = await server.inject({ method: 'GET', url: '/v1/inventory/sales-contracts', headers });
     expect(salesPortfolio.statusCode, salesPortfolio.body).toBe(200);
     expect(salesPortfolio.json().items).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: sale.json().id, reference: 'CV-2026-0043', commodity: 'MILHO' }),
+      expect.objectContaining({ id: sale.json().id, reference: 'CV-2026-0043', commodity: 'MILHO', status: 'DRAFT' }),
     ]));
     expect(salesPortfolio.json().counterparties).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'd1000000-0000-4000-8000-000000000005' }),
@@ -134,11 +140,49 @@ describe.runIf(Boolean(databaseUrl))('sales fulfillment and inventory ledger', (
     });
     expect(unknownHistory.statusCode).toBe(404);
 
+    const inactiveAllocation = await server.inject({
+      method: 'POST', url: '/v1/inventory/allocations', headers,
+      payload: { salesContractId: sale.json().id, lotId: initial.json().lots[0].id, quantityKg: '10000.000' },
+    });
+    expect(inactiveAllocation.statusCode).toBe(409);
+
+    const awaitingSignature = await server.inject({
+      method: 'POST', url: `/v1/inventory/sales-contracts/${sale.json().id}/transition`, headers,
+      payload: { status: 'AWAITING_SIGNATURE', reason: null },
+    });
+    expect(awaitingSignature.statusCode, awaitingSignature.body).toBe(201);
+    const signedDocumentId = randomUUID();
+    const signatureId = randomUUID();
+    const evidenceSetup = new Pool({ connectionString: databaseUrl });
+    await evidenceSetup.query(
+      `INSERT INTO app.documents
+        (tenant_id,id,aggregate_type,aggregate_id,document_type,file_name,mime_type,size_bytes,
+         storage_path,status,uploaded_at,created_by,sales_contract_version_number)
+       VALUES ($1,$2,'SALES_CONTRACT',$3,'SIGNED_CONTRACT','venda-assinada.pdf','application/pdf',100,
+               $4,'AVAILABLE',now(),$5,3)`,
+      [tenantId, signedDocumentId, sale.json().id, `test/${signedDocumentId}`, actorId],
+    );
+    await evidenceSetup.query(
+      `INSERT INTO app.document_signatures
+        (tenant_id,id,document_id,provider,signer_name,signer_role,status,signed_at,created_by)
+       VALUES ($1,$2,$3,'MANUAL','Diretor comercial','Representante legal','SIGNED',now(),$4)`,
+      [tenantId, signatureId, signedDocumentId, actorId],
+    );
+    await evidenceSetup.end();
+    for (const status of ['SIGNED', 'ACTIVE'] as const) {
+      const transition = await server.inject({
+        method: 'POST', url: `/v1/inventory/sales-contracts/${sale.json().id}/transition`, headers,
+        payload: { status, reason: null },
+      });
+      expect(transition.statusCode, transition.body).toBe(201);
+    }
+
     const allocation = await server.inject({
       method: 'POST', url: '/v1/inventory/allocations', headers,
       payload: { salesContractId: sale.json().id, lotId: initial.json().lots[0].id, quantityKg: '10000.000' },
     });
     expect(allocation.statusCode, allocation.body).toBe(201);
+    expect(allocation.json()).toMatchObject({ salesContractVersionNumber: 5 });
 
     const overflow = await server.inject({
       method: 'POST', url: '/v1/inventory/allocations', headers,

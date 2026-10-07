@@ -89,6 +89,21 @@ export const purchaseContractTermsSchema = z.object({
 
 export type PurchaseContractTermsInput = z.infer<typeof purchaseContractTermsSchema>;
 
+export const contractStatusTransitionSchema = z.object({
+  status: z.enum(['AWAITING_SIGNATURE', 'SIGNED', 'ACTIVE', 'CLOSED', 'CANCELLED']),
+  reason: z.string().trim().min(3).max(500).nullable().default(null),
+});
+
+export const purchaseContractAmendmentSchema = z.object({
+  expectedVersion: z.number().int().nonnegative(),
+  reason: z.string().trim().min(3).max(1000),
+  effectiveOn: localDate,
+  terms: purchaseContractTermsSchema.omit({ expectedVersion: true }),
+});
+
+export type ContractStatusTransitionInput = z.infer<typeof contractStatusTransitionSchema>;
+export type PurchaseContractAmendmentInput = z.infer<typeof purchaseContractAmendmentSchema>;
+
 const demandDetails = {
   counterpartyId: z.uuid(),
   direction: z.enum(['PURCHASE', 'SALE']),

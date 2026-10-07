@@ -22,6 +22,7 @@ interface ContractForScheduling {
   timezone: string;
   scheduled_local_date: string;
   scheduled_at: Date;
+  contract_version_number: number;
 }
 
 interface LoadRow {
@@ -180,13 +181,13 @@ export class OperationsService {
       const loadId = randomUUID();
       const result = await client.query<LoadRow>(
         `INSERT INTO app.loads
-          (tenant_id,id,contract_id,scheduled_at,expected_weight_kg,vehicle_plate,
+          (tenant_id,id,contract_id,contract_version_number,scheduled_at,expected_weight_kg,vehicle_plate,
            carrier_name,destination_code,status,created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'SCHEDULED',$9)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'SCHEDULED',$10)
          RETURNING id,contract_id,scheduled_at,expected_weight_kg,vehicle_plate,
                    carrier_name,destination_code,status,created_at`,
-        [tenantId, loadId, contractId, contract.scheduled_at, input.expectedWeightKg,
-          input.vehiclePlate, input.carrierName, input.destinationCode, actorId],
+        [tenantId, loadId, contractId, contract.contract_version_number, contract.scheduled_at,
+          input.expectedWeightKg, input.vehiclePlate, input.carrierName, input.destinationCode, actorId],
       );
       await this.record(client, tenantId, actorId, 'load.scheduled', loadId, {
         contractId,
@@ -197,6 +198,7 @@ export class OperationsService {
       });
       return {
         ...this.presentLoad(result.rows[0]!, contract.timezone),
+        contractVersionNumber: contract.contract_version_number,
         contractBalanceKg: availableWeight.minus(expectedWeight).toFixed(3),
       };
     });
@@ -954,6 +956,8 @@ export class OperationsService {
     scheduledLocal: string) {
     const result = await client.query<ContractForScheduling>(
       `SELECT c.status,o.quantity_sc,o.delivery_start::text,o.delivery_end::text,t.timezone,
+              (SELECT max(v.version_number) FROM app.contract_versions v
+                WHERE v.tenant_id=c.tenant_id AND v.contract_id=c.id) AS contract_version_number,
               ($3::timestamp AT TIME ZONE t.timezone) AS scheduled_at,
               $3::date::text AS scheduled_local_date
          FROM app.contracts c

@@ -14,6 +14,8 @@ import {
   marginPolicySchema,
   updateCommercialDemandSchema,
   purchaseContractTermsSchema,
+  contractStatusTransitionSchema,
+  purchaseContractAmendmentSchema,
   updateContractObligationSchema,
   updateCounterpartyProfileSchema,
   type CancelOfferInput,
@@ -26,6 +28,8 @@ import {
   type CreateOfferInput,
   type MarginPolicyInput,
   type PurchaseContractTermsInput,
+  type ContractStatusTransitionInput,
+  type PurchaseContractAmendmentInput,
   type UpdateCommercialDemandInput,
   type UpdateContractObligationInput,
   type UpdateCounterpartyProfileInput,
@@ -158,6 +162,26 @@ export class CommercialController {
     @Param('contractId', ParseUUIDPipe) contractId: string,
     @Body(new SchemaPipe(purchaseContractTermsSchema)) input: PurchaseContractTermsInput) {
     return this.service.savePurchaseTerms(identity.tenantId, identity.actorId, contractId, input);
+  }
+
+  @Get('contracts/:contractId/versions')
+  contractVersions(@Identity() identity: RequestIdentity,
+    @Param('contractId', ParseUUIDPipe) contractId: string) {
+    return this.service.contractVersions(identity.tenantId, identity.actorId, contractId);
+  }
+
+  @Post('contracts/:contractId/transition')
+  transitionContract(@Identity() identity: RequestIdentity,
+    @Param('contractId', ParseUUIDPipe) contractId: string,
+    @Body(new SchemaPipe(contractStatusTransitionSchema)) input: ContractStatusTransitionInput) {
+    return this.service.transitionContract(identity.tenantId, identity.actorId, contractId, input);
+  }
+
+  @Post('contracts/:contractId/amendments')
+  createContractAmendment(@Identity() identity: RequestIdentity,
+    @Param('contractId', ParseUUIDPipe) contractId: string,
+    @Body(new SchemaPipe(purchaseContractAmendmentSchema)) input: PurchaseContractAmendmentInput) {
+    return this.service.createContractAmendment(identity.tenantId, identity.actorId, contractId, input);
   }
 
   @Post('contracts/:contractId/obligations')

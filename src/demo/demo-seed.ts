@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 
-export const DEMO_SEED_VERSION = 12;
+export const DEMO_SEED_VERSION = 13;
 
 export type ResetDemoTenantInput = {
   tenantId: string;
@@ -293,6 +293,24 @@ async function seedOperationalData(client: PoolClient, input: ResetDemoTenantInp
     [tenantId, ids.contracts[0], ids.offers[0], ids.contracts[1], ids.offers[1], actorId],
   );
   await client.query(
+    `INSERT INTO app.contract_versions
+      (tenant_id,contract_id,version_number,lifecycle_status,change_type,reason,terms,recorded_by,recorded_at)
+     SELECT c.tenant_id,c.id,1,c.status,'CREATED','Versão inicial do cenário demonstrativo',
+            jsonb_build_object(
+              'offerId',c.offer_id,'commodity',o.commodity,'unit',o.unit,
+              'quantitySc',o.quantity_sc::text,'deliveryStart',o.delivery_start::text,
+              'deliveryEnd',o.delivery_end::text,'purchasePricePerSc',s.purchase_price_per_sc::text,
+              'saleReferencePerSc',s.sale_reference_per_sc::text,'costBreakdown',s.cost_breakdown,
+              'projectedMarginPerSc',s.projected_margin_per_sc::text,'purchaseTerms',NULL,'status',c.status),
+            c.created_by,c.activated_at
+       FROM app.contracts c
+       JOIN app.offers o ON (o.tenant_id,o.id)=(c.tenant_id,c.offer_id)
+       JOIN app.pricing_scenarios s
+         ON (s.tenant_id,s.offer_id)=(o.tenant_id,o.id) AND s.is_current=true
+      WHERE c.tenant_id=$1 AND c.id=ANY($2::uuid[])`,
+    [tenantId, [...ids.contracts]],
+  );
+  await client.query(
     `INSERT INTO app.contract_obligations
       (tenant_id,id,contract_id,code,title,status,completed_at,created_by,completed_by) VALUES
       ($1,$2,$6,'SIGNED_CONTRACT','Contrato assinado','COMPLETED','2026-09-13T12:00:00Z',$8,$8),
@@ -303,10 +321,10 @@ async function seedOperationalData(client: PoolClient, input: ResetDemoTenantInp
   );
   await client.query(
     `INSERT INTO app.loads
-      (tenant_id,id,contract_id,scheduled_at,expected_weight_kg,vehicle_plate,carrier_name,destination_code,status,created_by,created_at,updated_at) VALUES
-      ($1,$2,$5,'2026-10-15T11:00:00Z',48000.000,'ABC1D23','Transportadora Horizonte — Dado fictício','ARMAZEM_GO_01','RECEIVED',$7,'2026-09-22T13:00:00Z','2026-10-01T12:15:00Z'),
-      ($1,$3,$5,'2026-10-17T15:30:00Z',51000.000,'DEF4G56','Logística do Cerrado — Dado fictício','ARMAZEM_GO_01','IN_RECEIVING',$7,'2026-09-23T14:00:00Z','2026-10-01T14:05:00Z'),
-      ($1,$4,$6,'2026-10-22T12:00:00Z',45000.000,'GHI7J89','Transportadora Horizonte — Dado fictício','TERMINAL_SP_02','SCHEDULED',$7,'2026-09-27T12:00:00Z','2026-09-27T12:00:00Z')`,
+      (tenant_id,id,contract_id,contract_version_number,scheduled_at,expected_weight_kg,vehicle_plate,carrier_name,destination_code,status,created_by,created_at,updated_at) VALUES
+      ($1,$2,$5,1,'2026-10-15T11:00:00Z',48000.000,'ABC1D23','Transportadora Horizonte — Dado fictício','ARMAZEM_GO_01','RECEIVED',$7,'2026-09-22T13:00:00Z','2026-10-01T12:15:00Z'),
+      ($1,$3,$5,1,'2026-10-17T15:30:00Z',51000.000,'DEF4G56','Logística do Cerrado — Dado fictício','ARMAZEM_GO_01','IN_RECEIVING',$7,'2026-09-23T14:00:00Z','2026-10-01T14:05:00Z'),
+      ($1,$4,$6,1,'2026-10-22T12:00:00Z',45000.000,'GHI7J89','Transportadora Horizonte — Dado fictício','TERMINAL_SP_02','SCHEDULED',$7,'2026-09-27T12:00:00Z','2026-09-27T12:00:00Z')`,
     [tenantId, ...ids.loads, ...ids.contracts, actorId],
   );
   await client.query(
@@ -389,9 +407,23 @@ async function seedOperationalData(client: PoolClient, input: ResetDemoTenantInp
     [tenantId, ids.fulfillment.salesContract, ids.counterparties[4], actorId],
   );
   await client.query(
+    `INSERT INTO app.sales_contract_versions
+      (tenant_id,sales_contract_id,version_number,terms,recorded_by,recorded_at)
+     SELECT tenant_id,id,1,
+            jsonb_build_object(
+              'counterpartyId',counterparty_id,'reference',reference,'commodity',commodity,
+              'quantityKg',quantity_kg::text,'salePricePerKg',sale_price_per_kg::text,
+              'destinationCode',destination_code,'deliveryStart',delivery_start::text,
+              'deliveryEnd',delivery_end::text,'requiredDocuments',required_documents,
+              'paymentTermDays',payment_term_days,'status',status),
+            created_by,created_at
+       FROM app.sales_contracts WHERE tenant_id=$1 AND id=$2`,
+    [tenantId, ids.fulfillment.salesContract],
+  );
+  await client.query(
     `INSERT INTO app.inventory_allocations
-      (tenant_id,id,sales_contract_id,lot_id,quantity_kg,status,created_by,created_at)
-     VALUES ($1,$2,$3,$4,20000.000,'ACTIVE',$5,'2026-10-01T13:00:00Z')`,
+      (tenant_id,id,sales_contract_id,sales_contract_version_number,lot_id,quantity_kg,status,created_by,created_at)
+     VALUES ($1,$2,$3,1,$4,20000.000,'ACTIVE',$5,'2026-10-01T13:00:00Z')`,
     [tenantId, ids.fulfillment.allocation, ids.fulfillment.salesContract, ids.inventory.lot, actorId],
   );
   await client.query(
@@ -411,9 +443,9 @@ async function seedOperationalData(client: PoolClient, input: ResetDemoTenantInp
   await client.query(
     `INSERT INTO app.financial_events
       (tenant_id,id,event_type,source_type,source_id,sales_contract_id,counterparty_id,direction,
-       inventory_dispatch_id,quantity_kg,unit_price,raw_amount,calculated_amount,calculation_status,expected_on,
+       sales_contract_version_number,inventory_dispatch_id,quantity_kg,unit_price,raw_amount,calculated_amount,calculation_status,expected_on,
        formula_code,formula_version,calculation_memory,created_by,created_at)
-     VALUES ($1,$2,'SALE_DISPATCH_RECEIVABLE','INVENTORY_DISPATCH',$3,$4,$5,'INFLOW',$3,
+     VALUES ($1,$2,'SALE_DISPATCH_RECEIVABLE','INVENTORY_DISPATCH',$3,$4,$5,'INFLOW',1,$3,
        8000.000,1.420000,11360.000000000,11360.00,'READY','2026-10-08',
        'SALE_DISPATCH_GROSS',1,$6::jsonb,$7,'2026-10-01T16:05:00Z')`,
     [tenantId, ids.finance.event, ids.fulfillment.dispatch, ids.fulfillment.salesContract,

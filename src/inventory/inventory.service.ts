@@ -7,7 +7,8 @@ import { FinancialProjectionPort } from '../finance/finance.port.js';
 import { InventoryReceiptPort, type ApplyReceiptToInventoryInput } from './inventory.port.js';
 import type {
   AllocationInput, CompleteTransferInput, DispatchInput, InventoryCountInput,
-  InventoryLocationInput, LossInput, LotClassificationInput, SalesContractInput, StartTransferInput,
+  InventoryLocationInput, LossInput, LotClassificationInput, SalesContractInput,
+  SalesContractStatusTransitionInput, SalesContractAmendmentInput, StartTransferInput,
 } from './inventory.schemas.js';
 
 interface LotPositionRow {
@@ -295,8 +296,8 @@ export class InventoryService extends InventoryReceiptPort {
         await client.query(
           `INSERT INTO app.sales_contracts
             (tenant_id,id,counterparty_id,reference,commodity,quantity_kg,sale_price_per_kg,
-             destination_code,delivery_start,delivery_end,required_documents,payment_term_days,created_by)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+             destination_code,delivery_start,delivery_end,required_documents,payment_term_days,status,created_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'DRAFT',$13)`,
           [tenantId, id, input.counterpartyId, input.reference, input.commodity,
             new Decimal(input.quantityKg).toFixed(3), new Decimal(input.salePricePerKg).toFixed(6),
             input.destinationCode, input.deliveryStart, input.deliveryEnd, input.requiredDocuments,
@@ -308,7 +309,7 @@ export class InventoryService extends InventoryReceiptPort {
       }
       await this.recordSalesContractVersion(client, tenantId, actorId, id);
       await this.record(client, tenantId, actorId, 'sales_contract.created', 'sales_contract', id, input);
-      return { id, status: 'ACTIVE', ...input };
+      return { id, status: 'DRAFT', ...input };
     });
   }
 
@@ -320,7 +321,7 @@ export class InventoryService extends InventoryReceiptPort {
         [tenantId, contractId],
       );
       if (!current.rows[0]) throw new NotFoundException({ code: 'SALES_CONTRACT_NOT_FOUND' });
-      if (current.rows[0].status !== 'ACTIVE') throw new ConflictException({ code: 'SALES_CONTRACT_NOT_ACTIVE' });
+      if (current.rows[0].status !== 'DRAFT') throw new ConflictException({ code: 'SALES_CONTRACT_NOT_DRAFT' });
       const allocated = await client.query<{ allocated_kg: string }>(
         `SELECT COALESCE(sum(quantity_kg) FILTER (WHERE status<>'RELEASED'),0)::text AS allocated_kg
            FROM app.inventory_allocations WHERE tenant_id=$1 AND sales_contract_id=$2`,
@@ -370,8 +371,113 @@ export class InventoryService extends InventoryReceiptPort {
     });
   }
 
+  transitionSalesContract(tenantId: string, actorId: string, contractId: string,
+    input: SalesContractStatusTransitionInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'COMMERCIAL_EDIT');
+      const current = await client.query<{ status: string; quantity_kg: string }>(
+        `SELECT status,quantity_kg::text FROM app.sales_contracts
+          WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenantId, contractId]);
+      if (!current.rows[0]) throw new NotFoundException({ code: 'SALES_CONTRACT_NOT_FOUND' });
+      const allowed: Record<string, string[]> = {
+        DRAFT: ['AWAITING_SIGNATURE', 'CANCELLED'],
+        AWAITING_SIGNATURE: ['SIGNED', 'CANCELLED'],
+        SIGNED: ['ACTIVE', 'CANCELLED'],
+        ACTIVE: ['CLOSED', 'CANCELLED'],
+      };
+      if (!allowed[current.rows[0].status]?.includes(input.status)) {
+        throw new ConflictException({ code: 'INVALID_SALES_CONTRACT_STATUS_TRANSITION',
+          from: current.rows[0].status, to: input.status });
+      }
+      if (input.status === 'CANCELLED' && !input.reason) {
+        throw new UnprocessableEntityException({ code: 'SALES_CONTRACT_CANCELLATION_REASON_REQUIRED' });
+      }
+      if (input.status === 'SIGNED' || input.status === 'ACTIVE') {
+        const signed = await client.query(
+          `SELECT 1 FROM app.documents d
+           JOIN app.document_signatures ds ON (ds.tenant_id,ds.document_id)=(d.tenant_id,d.id)
+           WHERE d.tenant_id=$1 AND d.aggregate_type='SALES_CONTRACT' AND d.aggregate_id=$2
+             AND d.document_type='SIGNED_CONTRACT' AND d.status='AVAILABLE' AND ds.status='SIGNED'
+           LIMIT 1`, [tenantId, contractId]);
+        if (signed.rowCount !== 1) {
+          throw new UnprocessableEntityException({ code: 'SIGNED_SALES_CONTRACT_EVIDENCE_REQUIRED' });
+        }
+      }
+      const execution = await client.query<{ dispatched_kg: string; active_allocations: number }>(
+        `SELECT COALESCE(sum(d.quantity_kg),0)::text AS dispatched_kg,
+                count(DISTINCT a.id) FILTER (WHERE a.status='ACTIVE')::integer AS active_allocations
+           FROM app.inventory_allocations a
+           LEFT JOIN app.inventory_dispatches d
+             ON (d.tenant_id,d.allocation_id)=(a.tenant_id,a.id)
+          WHERE a.tenant_id=$1 AND a.sales_contract_id=$2`, [tenantId, contractId]);
+      if (input.status === 'CANCELLED' && new Decimal(execution.rows[0]!.dispatched_kg).isPositive()) {
+        throw new ConflictException({ code: 'DISPATCHED_SALES_CONTRACT_CANNOT_BE_CANCELLED' });
+      }
+      if (input.status === 'CLOSED') {
+        if (execution.rows[0]!.active_allocations > 0) {
+          throw new ConflictException({ code: 'ACTIVE_ALLOCATIONS_PREVENT_SALES_CONTRACT_CLOSURE' });
+        }
+        if (new Decimal(execution.rows[0]!.dispatched_kg).lessThan(current.rows[0].quantity_kg)) {
+          throw new ConflictException({ code: 'SALES_CONTRACT_BALANCE_PREVENTS_CLOSURE' });
+        }
+      }
+      await client.query(
+        `UPDATE app.sales_contracts SET status=$3,status_updated_at=now(),
+           signed_at=CASE WHEN $3='SIGNED' THEN now() ELSE signed_at END,
+           closed_at=CASE WHEN $3='CLOSED' THEN now() ELSE closed_at END,
+           cancelled_at=CASE WHEN $3='CANCELLED' THEN now() ELSE cancelled_at END,
+           cancellation_reason=CASE WHEN $3='CANCELLED' THEN $4 ELSE cancellation_reason END,
+           updated_at=now() WHERE tenant_id=$1 AND id=$2`,
+        [tenantId, contractId, input.status, input.reason]);
+      await this.recordSalesContractVersion(client, tenantId, actorId, contractId);
+      await this.record(client, tenantId, actorId, 'sales_contract.status_changed', 'sales_contract', contractId,
+        { from: current.rows[0].status, to: input.status, reason: input.reason });
+      return { contractId, previousStatus: current.rows[0].status, status: input.status };
+    });
+  }
+
+  amendSalesContract(tenantId: string, actorId: string, contractId: string,
+    input: SalesContractAmendmentInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'COMMERCIAL_EDIT');
+      const current = await client.query<{ status: string }>(
+        'SELECT status FROM app.sales_contracts WHERE tenant_id=$1 AND id=$2 FOR UPDATE',
+        [tenantId, contractId]);
+      if (!current.rows[0]) throw new NotFoundException({ code: 'SALES_CONTRACT_NOT_FOUND' });
+      if (current.rows[0].status !== 'ACTIVE') {
+        throw new ConflictException({ code: 'ONLY_ACTIVE_SALES_CONTRACTS_ACCEPT_AMENDMENTS' });
+      }
+      const allocated = await client.query<{ allocated_kg: string }>(
+        `SELECT COALESCE(sum(quantity_kg) FILTER (WHERE status<>'RELEASED'),0)::text AS allocated_kg
+           FROM app.inventory_allocations WHERE tenant_id=$1 AND sales_contract_id=$2`,
+        [tenantId, contractId]);
+      if (new Decimal(input.terms.quantityKg).lessThan(allocated.rows[0]!.allocated_kg)) {
+        throw new UnprocessableEntityException({ code: 'SALES_CONTRACT_BELOW_ALLOCATED_BALANCE' });
+      }
+      const t = input.terms;
+      await client.query(
+        `UPDATE app.sales_contracts SET counterparty_id=$3,reference=$4,commodity=$5,
+          quantity_kg=$6,sale_price_per_kg=$7,destination_code=$8,delivery_start=$9,
+          delivery_end=$10,required_documents=$11,payment_term_days=$12,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2`,
+        [tenantId, contractId, t.counterpartyId, t.reference, t.commodity,
+          new Decimal(t.quantityKg).toFixed(3), new Decimal(t.salePricePerKg).toFixed(6),
+          t.destinationCode, t.deliveryStart, t.deliveryEnd, t.requiredDocuments, t.paymentTermDays]);
+      const version = await this.recordSalesContractVersion(client, tenantId, actorId, contractId);
+      const amendmentId = randomUUID();
+      await client.query(
+        `INSERT INTO app.sales_contract_amendments
+          (tenant_id,id,sales_contract_id,sales_contract_version_number,reason,effective_on,created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [tenantId, amendmentId, contractId, version, input.reason, input.effectiveOn, actorId]);
+      await this.record(client, tenantId, actorId, 'sales_contract.amended', 'sales_contract', contractId,
+        { amendmentId, version, reason: input.reason, effectiveOn: input.effectiveOn });
+      return { amendmentId, contractId, version, effectiveOn: input.effectiveOn };
+    });
+  }
+
   private async recordSalesContractVersion(client: PoolClient, tenantId: string, actorId: string, contractId: string) {
-    await client.query(
+    const result = await client.query<{ version_number: number }>(
       `INSERT INTO app.sales_contract_versions
         (tenant_id,sales_contract_id,version_number,terms,recorded_by)
        SELECT sc.tenant_id,sc.id,
@@ -391,7 +497,9 @@ export class InventoryService extends InventoryReceiptPort {
                 'status',sc.status),
               $3
          FROM app.sales_contracts sc
-        WHERE sc.tenant_id=$1 AND sc.id=$2`, [tenantId, contractId, actorId]);
+        WHERE sc.tenant_id=$1 AND sc.id=$2
+       RETURNING version_number`, [tenantId, contractId, actorId]);
+    return result.rows[0]!.version_number;
   }
 
   allocate(tenantId: string, actorId: string, input: AllocationInput) {
@@ -412,8 +520,13 @@ export class InventoryService extends InventoryReceiptPort {
         [tenantId, input.lotId],
       );
       if (lotBase.rows[0].status !== 'AVAILABLE') throw new ConflictException({ code: 'INVENTORY_LOT_NOT_AVAILABLE' });
-      const contractBase = await client.query<{ commodity: string; status: string; quantity_kg: string }>(
-        `SELECT commodity,status,quantity_kg::text FROM app.sales_contracts
+      const contractBase = await client.query<{
+        commodity: string; status: string; quantity_kg: string; version_number: number;
+      }>(
+        `SELECT commodity,status,quantity_kg::text,
+                (SELECT max(version_number) FROM app.sales_contract_versions v
+                  WHERE v.tenant_id=sc.tenant_id AND v.sales_contract_id=sc.id) AS version_number
+           FROM app.sales_contracts sc
           WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenantId, input.salesContractId]);
       if (!contractBase.rows[0]) throw new NotFoundException({ code: 'SALES_CONTRACT_NOT_FOUND' });
       const contractAllocated = await client.query<{ allocated_kg: string }>(
@@ -436,11 +549,18 @@ export class InventoryService extends InventoryReceiptPort {
       const id = randomUUID();
       await client.query(
         `INSERT INTO app.inventory_allocations
-          (tenant_id,id,sales_contract_id,lot_id,quantity_kg,created_by)
-         VALUES ($1,$2,$3,$4,$5,$6)`,
-        [tenantId, id, input.salesContractId, input.lotId, quantity.toFixed(3), actorId]);
+          (tenant_id,id,sales_contract_id,sales_contract_version_number,lot_id,quantity_kg,created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [tenantId, id, input.salesContractId, contractBase.rows[0].version_number,
+          input.lotId, quantity.toFixed(3), actorId]);
       await this.record(client, tenantId, actorId, 'inventory.allocated', 'inventory_allocation', id, input);
-      return { id, status: 'ACTIVE', ...input, quantityKg: quantity.toFixed(3) };
+      return {
+        id,
+        status: 'ACTIVE',
+        ...input,
+        quantityKg: quantity.toFixed(3),
+        salesContractVersionNumber: contractBase.rows[0].version_number,
+      };
     });
   }
 

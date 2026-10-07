@@ -11,6 +11,8 @@ import {
   lossSchema,
   lotClassificationSchema,
   salesContractSchema,
+  salesContractStatusTransitionSchema,
+  salesContractAmendmentSchema,
   startTransferSchema,
   type AllocationInput,
   type CompleteTransferInput,
@@ -20,6 +22,8 @@ import {
   type LossInput,
   type LotClassificationInput,
   type SalesContractInput,
+  type SalesContractStatusTransitionInput,
+  type SalesContractAmendmentInput,
   type StartTransferInput,
 } from './inventory.schemas.js';
 import { InventoryService } from './inventory.service.js';
@@ -58,6 +62,20 @@ export class InventoryController {
   salesContractVersions(@Identity() identity: RequestIdentity,
     @Param('contractId', ParseUUIDPipe) contractId: string) {
     return this.service.salesContractVersions(identity.tenantId, identity.actorId, contractId);
+  }
+
+  @Post('sales-contracts/:contractId/transition')
+  transitionSalesContract(@Identity() identity: RequestIdentity,
+    @Param('contractId', ParseUUIDPipe) contractId: string,
+    @Body(new SchemaPipe(salesContractStatusTransitionSchema)) input: SalesContractStatusTransitionInput) {
+    return this.service.transitionSalesContract(identity.tenantId, identity.actorId, contractId, input);
+  }
+
+  @Post('sales-contracts/:contractId/amendments')
+  amendSalesContract(@Identity() identity: RequestIdentity,
+    @Param('contractId', ParseUUIDPipe) contractId: string,
+    @Body(new SchemaPipe(salesContractAmendmentSchema)) input: SalesContractAmendmentInput) {
+    return this.service.amendSalesContract(identity.tenantId, identity.actorId, contractId, input);
   }
 
   @Post('allocations')

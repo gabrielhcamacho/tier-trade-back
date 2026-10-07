@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { readFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../app.module.js';
@@ -53,6 +54,11 @@ describe.runIf(Boolean(databaseUrl))('financial receivables', () => {
       '20261005160901_cover_operational_completeness_foreign_keys.sql',
       '20261005161634_demo_reset_operational_completeness.sql',
       '20261005213800_contract_obligation_workflow.sql',
+      '20261007205930_purchase_contract_terms.sql',
+      '20261007213335_contract_obligation_evidence.sql',
+      '20261007214032_commercial_demands_negotiations.sql',
+      '20261007214736_cover_commercial_actor_foreign_keys_and_terms_rls.sql',
+      '20261007222434_contract_lifecycle_and_version_references.sql',
     ];
     for (const migration of migrations) {
       await setup.query(await readFile(new URL(`../../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
@@ -73,13 +79,47 @@ describe.runIf(Boolean(databaseUrl))('financial receivables', () => {
 
   afterAll(async () => app?.close());
 
+  async function activateSalesContract(contractId: string) {
+    const server = app.getHttpAdapter().getInstance();
+    const awaiting = await server.inject({
+      method: 'POST', url: `/v1/inventory/sales-contracts/${contractId}/transition`, headers,
+      payload: { status: 'AWAITING_SIGNATURE', reason: null },
+    });
+    expect(awaiting.statusCode, awaiting.body).toBe(201);
+    const documentId = randomUUID();
+    const signatureId = randomUUID();
+    const setup = new Pool({ connectionString: databaseUrl });
+    await setup.query(
+      `INSERT INTO app.documents
+        (tenant_id,id,aggregate_type,aggregate_id,document_type,file_name,mime_type,size_bytes,
+         storage_path,status,uploaded_at,created_by,sales_contract_version_number)
+       VALUES ($1,$2,'SALES_CONTRACT',$3,'SIGNED_CONTRACT','venda-assinada.pdf','application/pdf',128,
+               $4,'AVAILABLE',now(),$5,2)`,
+      [tenantId, documentId, contractId, `test/${documentId}`, actorId],
+    );
+    await setup.query(
+      `INSERT INTO app.document_signatures
+        (tenant_id,id,document_id,provider,signer_name,signer_role,status,signed_at,created_by)
+       VALUES ($1,$2,$3,'MANUAL','Diretoria comercial','Representante legal','SIGNED',now(),$4)`,
+      [tenantId, signatureId, documentId, actorId],
+    );
+    await setup.end();
+    for (const status of ['SIGNED', 'ACTIVE'] as const) {
+      const response = await server.inject({
+        method: 'POST', url: `/v1/inventory/sales-contracts/${contractId}/transition`, headers,
+        payload: { status, reason: null },
+      });
+      expect(response.statusCode, response.body).toBe(201);
+    }
+  }
+
   it('loads persisted forecasts, titles and receipts from the demo tenant', async () => {
     const response = await app.getHttpAdapter().getInstance().inject({
       method: 'GET', url: '/v1/finance', headers,
     });
     expect(response.statusCode, response.body).toBe(200);
     expect(response.json()).toMatchObject({
-      tenant: { isDemo: true, demoSeedVersion: 12 },
+      tenant: { isDemo: true, demoSeedVersion: 13 },
       summary: {
         projectedAmount: '11360.00', receivableAmount: '7360.00', receivedAmount: '4000.00',
         payableAmount: '0.00',
@@ -105,6 +145,7 @@ describe.runIf(Boolean(databaseUrl))('financial receivables', () => {
         requiredDocuments: ['Nota fiscal'], paymentTermDays: 10,
       },
     });
+    await activateSalesContract(sale.json().id);
     const allocation = await server.inject({
       method: 'POST', url: '/v1/inventory/allocations', headers,
       payload: { salesContractId: sale.json().id, lotId: inventory.json().lots[0].id, quantityKg: '5000.000' },
@@ -200,6 +241,7 @@ describe.runIf(Boolean(databaseUrl))('financial receivables', () => {
         requiredDocuments: [], paymentTermDays: null,
       },
     });
+    await activateSalesContract(sale.json().id);
     const allocation = await server.inject({
       method: 'POST', url: '/v1/inventory/allocations', headers,
       payload: { salesContractId: sale.json().id, lotId: inventory.json().lots[0].id, quantityKg: '10.000' },
@@ -232,11 +274,11 @@ describe.runIf(Boolean(databaseUrl))('financial receivables', () => {
       await client.query('BEGIN');
       await client.query("SELECT set_config('app.tenant_id',$1,true)", [tenantId]);
       await client.query(
-        `INSERT INTO app.documents
+         `INSERT INTO app.documents
           (tenant_id,id,aggregate_type,aggregate_id,document_type,file_name,mime_type,size_bytes,
-           storage_path,status,version,uploaded_at,created_by)
+           storage_path,status,version,uploaded_at,created_by,contract_version_number)
          VALUES ($1,$2,'CONTRACT',$3,'SIGNED_CONTRACT','contrato.pdf','application/pdf',128,
-                 $4,'AVAILABLE',1,now(),$5)`,
+                 $4,'AVAILABLE',1,now(),$5,1)`,
         [tenantId, documentId, 'd5000000-0000-4000-8000-000000000001',
           `${tenantId}/contract/d5000000-0000-4000-8000-000000000001/${documentId}/contrato.pdf`, actorId],
       );

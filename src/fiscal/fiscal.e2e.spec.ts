@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import Decimal from 'decimal.js';
+import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -53,6 +54,11 @@ describe.runIf(Boolean(databaseUrl))('fiscal document registry', () => {
       '20261005160901_cover_operational_completeness_foreign_keys.sql',
       '20261005161634_demo_reset_operational_completeness.sql',
       '20261005213800_contract_obligation_workflow.sql',
+      '20261007205930_purchase_contract_terms.sql',
+      '20261007213335_contract_obligation_evidence.sql',
+      '20261007214032_commercial_demands_negotiations.sql',
+      '20261007214736_cover_commercial_actor_foreign_keys_and_terms_rls.sql',
+      '20261007222434_contract_lifecycle_and_version_references.sql',
     ]) {
       await setup.query(await readFile(new URL(`../../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
     }
@@ -78,7 +84,7 @@ describe.runIf(Boolean(databaseUrl))('fiscal document registry', () => {
     });
     expect(response.statusCode, response.body).toBe(200);
     expect(response.json()).toMatchObject({
-      tenant: { isDemo: true, demoSeedVersion: 12 },
+      tenant: { isDemo: true, demoSeedVersion: 13 },
       summary: { received: 1, validated: 0, rejected: 0, linkedTitles: 0 },
       documents: [{
         id: documentId, contractReference: 'CV-2026-0042', documentNumber: 'NFE-DEMO-0001',
@@ -522,8 +528,52 @@ describe.runIf(Boolean(databaseUrl))('fiscal document registry', () => {
       method: 'POST', url: `/v1/offers/${offer.json().offerId}/activate-contract`, headers,
     });
     expect(contract.statusCode, contract.body).toBe(201);
+    const contractId = contract.json().contractId as string;
+    const terms = await server.inject({
+      method: 'PUT', url: `/v1/contracts/${contractId}/purchase-terms`, headers,
+      payload: {
+        expectedVersion: 0, externalNumber: 'CMP-SOJA-E2E-01', cropYear: '2025/26',
+        signedOn: '2026-10-20', pickupLocation: 'Unidade Mato Grosso',
+        deliveryCondition: 'Entrega programada', freightPayer: 'BUYER',
+        weighingResponsibility: 'Trading compradora',
+        qualityTerms: 'Classificação por carga conforme cenário homologado.',
+        requiredDocuments: 'NF-e, romaneio e laudo de classificação.',
+        paymentTerms: 'Pagamento conforme conferência fiscal e operacional.',
+      },
+    });
+    expect(terms.statusCode, terms.body).toBe(200);
+    const awaiting = await server.inject({
+      method: 'POST', url: `/v1/contracts/${contractId}/transition`, headers,
+      payload: { status: 'AWAITING_SIGNATURE', reason: null },
+    });
+    expect(awaiting.statusCode, awaiting.body).toBe(201);
+    const signedDocumentId = randomUUID();
+    const signatureId = randomUUID();
+    const signatureSetup = new Pool({ connectionString: databaseUrl });
+    await signatureSetup.query(
+      `INSERT INTO app.documents
+        (tenant_id,id,aggregate_type,aggregate_id,document_type,file_name,mime_type,size_bytes,
+         storage_path,status,uploaded_at,created_by,contract_version_number)
+       VALUES ($1,$2,'CONTRACT',$3,'SIGNED_CONTRACT','compra-soja-assinada.pdf','application/pdf',128,
+               $4,'AVAILABLE',now(),$5,3)`,
+      [tenantId, signedDocumentId, contractId, `test/${signedDocumentId}`, actorId],
+    );
+    await signatureSetup.query(
+      `INSERT INTO app.document_signatures
+        (tenant_id,id,document_id,provider,signer_name,signer_role,status,signed_at,created_by)
+       VALUES ($1,$2,$3,'MANUAL','Diretoria JD','Compradora','SIGNED',now(),$4)`,
+      [tenantId, signatureId, signedDocumentId, actorId],
+    );
+    await signatureSetup.end();
+    for (const status of ['SIGNED', 'ACTIVE'] as const) {
+      const transition = await server.inject({
+        method: 'POST', url: `/v1/contracts/${contractId}/transition`, headers,
+        payload: { status, reason: null },
+      });
+      expect(transition.statusCode, transition.body).toBe(201);
+    }
     const load = await server.inject({
-      method: 'POST', url: `/v1/contracts/${contract.json().contractId}/loads`, headers,
+      method: 'POST', url: `/v1/contracts/${contractId}/loads`, headers,
       payload: {
         scheduledLocal: '2026-11-10T08:30', expectedWeightKg: '12000.000',
         vehiclePlate: 'SOJ-1A23', carrierName: 'Transportadora cenário JD', destinationCode: 'ARM-MT01',
@@ -617,9 +667,40 @@ describe.runIf(Boolean(databaseUrl))('fiscal document registry', () => {
       },
     });
     expect(sale.statusCode, sale.body).toBe(201);
+    const saleId = sale.json().id as string;
+    const saleAwaiting = await server.inject({
+      method: 'POST', url: `/v1/inventory/sales-contracts/${saleId}/transition`, headers,
+      payload: { status: 'AWAITING_SIGNATURE', reason: null },
+    });
+    expect(saleAwaiting.statusCode, saleAwaiting.body).toBe(201);
+    const saleDocumentId = randomUUID();
+    const saleSignatureId = randomUUID();
+    const saleSignatureSetup = new Pool({ connectionString: databaseUrl });
+    await saleSignatureSetup.query(
+      `INSERT INTO app.documents
+        (tenant_id,id,aggregate_type,aggregate_id,document_type,file_name,mime_type,size_bytes,
+         storage_path,status,uploaded_at,created_by,sales_contract_version_number)
+       VALUES ($1,$2,'SALES_CONTRACT',$3,'SIGNED_CONTRACT','venda-soja-assinada.pdf','application/pdf',128,
+               $4,'AVAILABLE',now(),$5,2)`,
+      [tenantId, saleDocumentId, saleId, `test/${saleDocumentId}`, actorId],
+    );
+    await saleSignatureSetup.query(
+      `INSERT INTO app.document_signatures
+        (tenant_id,id,document_id,provider,signer_name,signer_role,status,signed_at,created_by)
+       VALUES ($1,$2,$3,'MANUAL','Diretoria comercial','Vendedora','SIGNED',now(),$4)`,
+      [tenantId, saleSignatureId, saleDocumentId, actorId],
+    );
+    await saleSignatureSetup.end();
+    for (const status of ['SIGNED', 'ACTIVE'] as const) {
+      const saleTransition = await server.inject({
+        method: 'POST', url: `/v1/inventory/sales-contracts/${saleId}/transition`, headers,
+        payload: { status, reason: null },
+      });
+      expect(saleTransition.statusCode, saleTransition.body).toBe(201);
+    }
     const allocation = await server.inject({
       method: 'POST', url: '/v1/inventory/allocations', headers,
-      payload: { salesContractId: sale.json().id, lotId: soyLot.id, quantityKg: '6000.000' },
+      payload: { salesContractId: saleId, lotId: soyLot.id, quantityKg: '6000.000' },
     });
     const dispatch = await server.inject({
       method: 'POST', url: '/v1/inventory/dispatches', headers,

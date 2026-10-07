@@ -497,8 +497,10 @@ export class FinanceService extends FinancialProjectionPort {
     const source = await client.query<{
       quantity_kg: string; sale_price_per_kg: string; sales_contract_id: string;
       counterparty_id: string; dispatched_at: Date; expected_on: string | null;
+      sales_contract_version_number: number;
     }>(
       `SELECT d.quantity_kg::text,sc.sale_price_per_kg::text,sc.id AS sales_contract_id,
+              a.sales_contract_version_number,
               sc.counterparty_id,d.dispatched_at,
               CASE WHEN sc.payment_term_days IS NULL THEN NULL
                 ELSE ((d.dispatched_at AT TIME ZONE t.timezone)::date + sc.payment_term_days)::text
@@ -526,12 +528,13 @@ export class FinanceService extends FinancialProjectionPort {
     };
     await client.query(
       `INSERT INTO app.financial_events
-        (tenant_id,id,event_type,source_type,source_id,sales_contract_id,counterparty_id,
+        (tenant_id,id,event_type,source_type,source_id,sales_contract_id,sales_contract_version_number,counterparty_id,
          inventory_dispatch_id,direction,quantity_kg,unit_price,raw_amount,calculated_amount,calculation_status,
          expected_on,formula_code,formula_version,calculation_memory,created_by)
-       VALUES ($1,$2,'SALE_DISPATCH_RECEIVABLE','INVENTORY_DISPATCH',$3,$4,$5,$3,'INFLOW',
-         $6,$7,$8,$9,$10,$11,'SALE_DISPATCH_GROSS',1,$12::jsonb,$13)`,
-      [input.tenantId, id, input.dispatchId, row.sales_contract_id, row.counterparty_id,
+       VALUES ($1,$2,'SALE_DISPATCH_RECEIVABLE','INVENTORY_DISPATCH',$3,$4,$5,$6,$3,'INFLOW',
+         $7,$8,$9,$10,$11,$12,'SALE_DISPATCH_GROSS',1,$13::jsonb,$14)`,
+      [input.tenantId, id, input.dispatchId, row.sales_contract_id, row.sales_contract_version_number,
+        row.counterparty_id,
         new Decimal(row.quantity_kg).toFixed(3), new Decimal(row.sale_price_per_kg).toFixed(6),
         raw.toFixed(9), exactCents ? raw.toFixed(2) : null, calculationStatus,
         row.expected_on, JSON.stringify(memory), input.actorId]);

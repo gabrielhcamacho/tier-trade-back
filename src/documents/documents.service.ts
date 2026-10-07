@@ -34,6 +34,7 @@ export class DocumentsService {
       const result = await client.query(
         `SELECT d.id,d.aggregate_type,d.aggregate_id,d.document_type,d.file_name,d.mime_type,
                 d.size_bytes::text,d.status,d.version,d.notes,d.uploaded_at,d.created_at,
+                d.contract_version_number,d.sales_contract_version_number,
                 COALESCE(jsonb_agg(jsonb_build_object(
                   'id',s.id,'provider',s.provider,'externalEnvelopeId',s.external_envelope_id,
                   'signerName',s.signer_name,'signerEmail',s.signer_email,'signerRole',s.signer_role,
@@ -44,7 +45,8 @@ export class DocumentsService {
           WHERE d.tenant_id=$1 AND ($2::text IS NULL OR d.aggregate_type=$2)
             AND ($3::uuid IS NULL OR d.aggregate_id=$3)
           GROUP BY d.id,d.aggregate_type,d.aggregate_id,d.document_type,d.file_name,d.mime_type,
-                   d.size_bytes,d.status,d.version,d.notes,d.uploaded_at,d.created_at
+                   d.size_bytes,d.status,d.version,d.notes,d.uploaded_at,d.created_at,
+                   d.contract_version_number,d.sales_contract_version_number
           ORDER BY d.created_at DESC,d.id DESC`, [tenantId, aggregateType ?? null, aggregateId ?? null]);
       return { items: result.rows };
     });
@@ -56,6 +58,7 @@ export class DocumentsService {
       await this.assertAggregate(client, tenantId, input.aggregateType, input.aggregateId);
       const id = randomUUID();
       const version = await this.nextVersion(client, tenantId, input);
+      const aggregateVersion = await this.currentAggregateVersion(client, tenantId, input);
       const safeName = input.fileName.normalize('NFKD').replace(/[^a-zA-Z0-9._-]+/g, '-').slice(0, 180);
       const storagePath = `${tenantId}/${input.aggregateType.toLowerCase()}/${input.aggregateId}/${id}/${safeName}`;
       const signed = await this.storage.storage.from(bucket).createSignedUploadUrl(storagePath, { upsert: false });
@@ -65,10 +68,12 @@ export class DocumentsService {
       await client.query(
         `INSERT INTO app.documents
           (tenant_id,id,aggregate_type,aggregate_id,document_type,file_name,mime_type,size_bytes,
-           storage_bucket,storage_path,version,notes,created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+           storage_bucket,storage_path,version,notes,created_by,
+           contract_version_number,sales_contract_version_number)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
         [tenantId, id, input.aggregateType, input.aggregateId, input.documentType, input.fileName,
-          input.mimeType, input.sizeBytes, bucket, storagePath, version, input.notes, actorId]);
+          input.mimeType, input.sizeBytes, bucket, storagePath, version, input.notes, actorId,
+          aggregateVersion.contractVersion, aggregateVersion.salesContractVersion]);
       await this.record(client, tenantId, actorId, 'document.upload_requested', id, {
         aggregateType: input.aggregateType, aggregateId: input.aggregateId,
         documentType: input.documentType, version,
@@ -144,6 +149,22 @@ export class DocumentsService {
         WHERE tenant_id=$1 AND aggregate_type=$2 AND aggregate_id=$3 AND document_type=$4`,
       [tenantId, input.aggregateType, input.aggregateId, input.documentType]);
     return Number(result.rows[0]!.version);
+  }
+
+  private async currentAggregateVersion(client: PoolClient, tenantId: string, input: CreateUploadRequestInput) {
+    if (input.aggregateType === 'CONTRACT') {
+      const result = await client.query<{ version: number }>(
+        `SELECT max(version_number)::integer AS version FROM app.contract_versions
+          WHERE tenant_id=$1 AND contract_id=$2`, [tenantId, input.aggregateId]);
+      return { contractVersion: result.rows[0]?.version ?? null, salesContractVersion: null };
+    }
+    if (input.aggregateType === 'SALES_CONTRACT') {
+      const result = await client.query<{ version: number }>(
+        `SELECT max(version_number)::integer AS version FROM app.sales_contract_versions
+          WHERE tenant_id=$1 AND sales_contract_id=$2`, [tenantId, input.aggregateId]);
+      return { contractVersion: null, salesContractVersion: result.rows[0]?.version ?? null };
+    }
+    return { contractVersion: null, salesContractVersion: null };
   }
 
   private async assertAggregate(client: PoolClient, tenantId: string,

@@ -15,6 +15,8 @@ import type {
   CreateOfferInput,
   MarginPolicyInput,
   PurchaseContractTermsInput,
+  ContractStatusTransitionInput,
+  PurchaseContractAmendmentInput,
   UpdateContractObligationInput,
   UpdateCounterpartyProfileInput,
   UpdateCommercialDemandInput,
@@ -499,7 +501,7 @@ export class CommercialService {
       const contractId = randomUUID();
       await client.query(
         `INSERT INTO app.contracts (tenant_id,id,offer_id,status,created_by)
-         VALUES ($1,$2,$3,'ACTIVE',$4)`, [tenantId, contractId, offerId, actorId]);
+         VALUES ($1,$2,$3,'DRAFT',$4)`, [tenantId, contractId, offerId, actorId]);
       await client.query(
         `INSERT INTO app.contract_obligations
            (tenant_id,id,contract_id,code,title,status,created_by)
@@ -509,8 +511,9 @@ export class CommercialService {
         [tenantId, randomUUID(), contractId, randomUUID(), actorId]);
       await client.query(`UPDATE app.offers SET status='CONVERTED', updated_at=now()
         WHERE tenant_id=$1 AND id=$2`, [tenantId, offerId]);
-      await this.record(client, tenantId, actorId, 'contract.activated', 'contract', contractId, { offerId });
-      return { contractId, offerId, status: 'ACTIVE' };
+      await this.recordContractVersion(client, tenantId, actorId, contractId, 'CREATED', null);
+      await this.record(client, tenantId, actorId, 'contract.created', 'contract', contractId, { offerId });
+      return { contractId, offerId, status: 'DRAFT' };
     });
   }
 
@@ -654,12 +657,17 @@ export class CommercialService {
         [tenantId, contractId],
       );
       if (!contract.rows[0]) throw new NotFoundException({ code: 'CONTRACT_NOT_FOUND' });
-      if (contract.rows[0].status !== 'ACTIVE') throw new ConflictException({ code: 'CONTRACT_NOT_ACTIVE' });
+      if (!['DRAFT', 'AWAITING_SIGNATURE', 'SIGNED', 'ACTIVE'].includes(contract.rows[0].status)) {
+        throw new ConflictException({ code: 'CONTRACT_TERMS_NOT_EDITABLE' });
+      }
       const before = await client.query(
         'SELECT * FROM app.purchase_contract_terms WHERE tenant_id=$1 AND contract_id=$2 FOR UPDATE',
         [tenantId, contractId],
       );
       const previous = before.rows[0] ?? null;
+      if (contract.rows[0].status === 'ACTIVE' && previous) {
+        throw new ConflictException({ code: 'ACTIVE_CONTRACT_REQUIRES_AMENDMENT' });
+      }
       if ((previous?.version ?? 0) !== input.expectedVersion) {
         throw new ConflictException({ code: 'PURCHASE_TERMS_VERSION_CONFLICT' });
       }
@@ -687,7 +695,133 @@ export class CommercialService {
       );
       await this.record(client, tenantId, actorId, 'contract.purchase_terms_saved', 'contract', contractId,
         { before: previous, after: saved.rows[0] });
+      await this.recordContractVersion(client, tenantId, actorId, contractId, 'TERMS_UPDATED', null);
       return saved.rows[0];
+    });
+  }
+
+  async contractVersions(tenantId: string, actorId: string, contractId: string) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertMember(client, tenantId, actorId);
+      const contract = await client.query('SELECT 1 FROM app.contracts WHERE tenant_id=$1 AND id=$2',
+        [tenantId, contractId]);
+      if (contract.rowCount !== 1) throw new NotFoundException({ code: 'CONTRACT_NOT_FOUND' });
+      const versions = await client.query(
+        `SELECT v.version_number,v.lifecycle_status,v.change_type,v.reason,v.terms,
+                v.recorded_by,v.recorded_at,a.id AS amendment_id,a.effective_on
+           FROM app.contract_versions v
+           LEFT JOIN app.contract_amendments a
+             ON (a.tenant_id,a.contract_id,a.contract_version_number)=
+                (v.tenant_id,v.contract_id,v.version_number)
+          WHERE v.tenant_id=$1 AND v.contract_id=$2
+          ORDER BY v.version_number DESC`, [tenantId, contractId]);
+      return { contractId, versions: versions.rows };
+    });
+  }
+
+  async transitionContract(tenantId: string, actorId: string, contractId: string,
+    input: ContractStatusTransitionInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'COMMERCIAL_EDIT');
+      const current = await this.db.one<{ status: string }>(client,
+        'SELECT status FROM app.contracts WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [tenantId, contractId]);
+      const allowed: Record<string, string[]> = {
+        DRAFT: ['AWAITING_SIGNATURE', 'CANCELLED'],
+        AWAITING_SIGNATURE: ['SIGNED', 'CANCELLED'],
+        SIGNED: ['ACTIVE', 'CANCELLED'],
+        ACTIVE: ['CLOSED', 'CANCELLED'],
+      };
+      if (!allowed[current.status]?.includes(input.status)) {
+        throw new ConflictException({ code: 'INVALID_CONTRACT_STATUS_TRANSITION',
+          from: current.status, to: input.status });
+      }
+      if (input.status === 'CANCELLED' && !input.reason) {
+        throw new UnprocessableEntityException({ code: 'CONTRACT_CANCELLATION_REASON_REQUIRED' });
+      }
+      if (input.status === 'AWAITING_SIGNATURE') {
+        const terms = await client.query(
+          'SELECT 1 FROM app.purchase_contract_terms WHERE tenant_id=$1 AND contract_id=$2',
+          [tenantId, contractId]);
+        if (terms.rowCount !== 1) throw new UnprocessableEntityException({ code: 'PURCHASE_TERMS_REQUIRED' });
+      }
+      if (input.status === 'SIGNED' || input.status === 'ACTIVE') {
+        const signed = await client.query(
+          `SELECT 1 FROM app.documents d
+           JOIN app.document_signatures ds ON (ds.tenant_id,ds.document_id)=(d.tenant_id,d.id)
+           WHERE d.tenant_id=$1 AND d.aggregate_type='CONTRACT' AND d.aggregate_id=$2
+             AND d.document_type='SIGNED_CONTRACT' AND d.status='AVAILABLE' AND ds.status='SIGNED'
+           LIMIT 1`, [tenantId, contractId]);
+        if (signed.rowCount !== 1) {
+          throw new UnprocessableEntityException({ code: 'SIGNED_CONTRACT_EVIDENCE_REQUIRED' });
+        }
+      }
+      if (input.status === 'CLOSED') {
+        const open = await client.query(
+          `SELECT 1 FROM app.loads WHERE tenant_id=$1 AND contract_id=$2
+             AND status IN ('SCHEDULED','IN_RECEIVING') LIMIT 1`, [tenantId, contractId]);
+        if (open.rowCount) throw new ConflictException({ code: 'OPEN_LOADS_PREVENT_CONTRACT_CLOSURE' });
+      }
+      if (input.status === 'CANCELLED') {
+        const executed = await client.query(
+          `SELECT 1 FROM app.loads WHERE tenant_id=$1 AND contract_id=$2
+             AND status IN ('IN_RECEIVING','RECEIVED') LIMIT 1`, [tenantId, contractId]);
+        if (executed.rowCount) throw new ConflictException({ code: 'EXECUTED_LOADS_PREVENT_CONTRACT_CANCELLATION' });
+      }
+      await client.query(
+        `UPDATE app.contracts SET status=$3,status_updated_at=now(),
+           signed_at=CASE WHEN $3='SIGNED' THEN now() ELSE signed_at END,
+           activated_at=CASE WHEN $3='ACTIVE' THEN now() ELSE activated_at END,
+           closed_at=CASE WHEN $3='CLOSED' THEN now() ELSE closed_at END,
+           cancelled_at=CASE WHEN $3='CANCELLED' THEN now() ELSE cancelled_at END,
+           cancellation_reason=CASE WHEN $3='CANCELLED' THEN $4 ELSE cancellation_reason END
+         WHERE tenant_id=$1 AND id=$2`, [tenantId, contractId, input.status, input.reason]);
+      if (input.status === 'SIGNED') {
+        await client.query(
+          `UPDATE app.contract_obligations SET status='COMPLETED',completed_at=COALESCE(completed_at,now()),
+             completed_by=COALESCE(completed_by,$3),updated_at=now()
+           WHERE tenant_id=$1 AND contract_id=$2 AND code='SIGNED_CONTRACT'`,
+          [tenantId, contractId, actorId]);
+      }
+      await this.recordContractVersion(client, tenantId, actorId, contractId, 'STATUS_TRANSITION', input.reason);
+      await this.record(client, tenantId, actorId, 'contract.status_changed', 'contract', contractId,
+        { from: current.status, to: input.status, reason: input.reason });
+      return { contractId, previousStatus: current.status, status: input.status };
+    });
+  }
+
+  async createContractAmendment(tenantId: string, actorId: string, contractId: string,
+    input: PurchaseContractAmendmentInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'COMMERCIAL_EDIT');
+      const contract = await this.db.one<{ status: string }>(client,
+        'SELECT status FROM app.contracts WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [tenantId, contractId]);
+      if (contract.status !== 'ACTIVE') throw new ConflictException({ code: 'ONLY_ACTIVE_CONTRACTS_ACCEPT_AMENDMENTS' });
+      const before = await this.db.one<{ version: number }>(client,
+        'SELECT version FROM app.purchase_contract_terms WHERE tenant_id=$1 AND contract_id=$2 FOR UPDATE',
+        [tenantId, contractId]);
+      if (before.version !== input.expectedVersion) {
+        throw new ConflictException({ code: 'PURCHASE_TERMS_VERSION_CONFLICT' });
+      }
+      const t = input.terms;
+      await client.query(
+        `UPDATE app.purchase_contract_terms SET external_number=$3,crop_year=$4,signed_on=$5,
+           pickup_location=$6,delivery_condition=$7,freight_payer=$8,weighing_responsibility=$9,
+           quality_terms=$10,required_documents=$11,payment_terms=$12,updated_by=$13,
+           updated_at=now(),version=version+1 WHERE tenant_id=$1 AND contract_id=$2`,
+        [tenantId, contractId, t.externalNumber, t.cropYear, t.signedOn, t.pickupLocation,
+          t.deliveryCondition, t.freightPayer, t.weighingResponsibility, t.qualityTerms,
+          t.requiredDocuments, t.paymentTerms, actorId]);
+      const version = await this.recordContractVersion(
+        client, tenantId, actorId, contractId, 'AMENDMENT', input.reason);
+      const amendmentId = randomUUID();
+      await client.query(
+        `INSERT INTO app.contract_amendments
+          (tenant_id,id,contract_id,contract_version_number,reason,effective_on,created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [tenantId, amendmentId, contractId, version, input.reason, input.effectiveOn, actorId]);
+      await this.record(client, tenantId, actorId, 'contract.amended', 'contract', contractId,
+        { amendmentId, version, reason: input.reason, effectiveOn: input.effectiveOn });
+      return { amendmentId, contractId, version, effectiveOn: input.effectiveOn };
     });
   }
 
@@ -706,7 +840,7 @@ export class CommercialService {
            JOIN app.contracts c ON (c.tenant_id,c.id)=(ob.tenant_id,ob.contract_id)
            JOIN app.offers o ON (o.tenant_id,o.id)=(c.tenant_id,c.offer_id)
            JOIN app.counterparties cp ON (cp.tenant_id,cp.id)=(o.tenant_id,o.counterparty_id)
-          WHERE ob.tenant_id=$1 AND c.status='ACTIVE'
+          WHERE ob.tenant_id=$1 AND c.status IN ('DRAFT','AWAITING_SIGNATURE','SIGNED','ACTIVE')
             AND ob.status IN ('PENDING','IN_PROGRESS')
           ORDER BY ob.due_date NULLS LAST,ob.created_at,ob.id
           LIMIT 101`, [tenantId]);
@@ -723,8 +857,8 @@ export class CommercialService {
         [tenantId, contractId],
       );
       if (!contract.rows[0]) throw new NotFoundException({ code: 'CONTRACT_NOT_FOUND' });
-      if (contract.rows[0].status !== 'ACTIVE') {
-        throw new ConflictException({ code: 'CONTRACT_NOT_ACTIVE' });
+      if (!['DRAFT', 'AWAITING_SIGNATURE', 'SIGNED', 'ACTIVE'].includes(contract.rows[0].status)) {
+        throw new ConflictException({ code: 'CONTRACT_OBLIGATIONS_NOT_EDITABLE' });
       }
       const obligationId = randomUUID();
       const code = `CUSTOM_${obligationId.replaceAll('-', '').toUpperCase()}`;
@@ -789,7 +923,8 @@ export class CommercialService {
       const obligation = await client.query<{ id: string }>(
         `SELECT ob.id FROM app.contract_obligations ob
          JOIN app.contracts c ON (c.tenant_id,c.id)=(ob.tenant_id,ob.contract_id)
-         WHERE ob.tenant_id=$1 AND ob.contract_id=$2 AND ob.id=$3 AND c.status='ACTIVE'`,
+         WHERE ob.tenant_id=$1 AND ob.contract_id=$2 AND ob.id=$3
+           AND c.status IN ('DRAFT','AWAITING_SIGNATURE','SIGNED','ACTIVE')`,
         [tenantId, contractId, obligationId],
       );
       if (!obligation.rows[0]) throw new NotFoundException({ code: 'CONTRACT_OBLIGATION_NOT_FOUND' });
@@ -853,6 +988,54 @@ export class CommercialService {
     if (counterparty.rows[0]?.party_type === 'UNCLASSIFIED') {
       throw new UnprocessableEntityException({ code: 'COUNTERPARTY_PROFILE_REQUIRED' });
     }
+  }
+
+  private async recordContractVersion(client: PoolClient, tenantId: string, actorId: string,
+    contractId: string, changeType: 'CREATED' | 'TERMS_UPDATED' | 'STATUS_TRANSITION' | 'AMENDMENT',
+    reason: string | null) {
+    const result = await client.query<{ version_number: number }>(
+      `INSERT INTO app.contract_versions
+        (tenant_id,contract_id,version_number,lifecycle_status,change_type,reason,terms,recorded_by)
+       SELECT c.tenant_id,c.id,
+              COALESCE((SELECT max(v.version_number)+1 FROM app.contract_versions v
+                         WHERE v.tenant_id=c.tenant_id AND v.contract_id=c.id),1),
+              c.status,$3,$4,
+              jsonb_build_object(
+                'offerId',c.offer_id,
+                'commodity',o.commodity,
+                'unit',o.unit,
+                'quantitySc',o.quantity_sc::text,
+                'deliveryStart',o.delivery_start::text,
+                'deliveryEnd',o.delivery_end::text,
+                'purchasePricePerSc',s.purchase_price_per_sc::text,
+                'saleReferencePerSc',s.sale_reference_per_sc::text,
+                'costBreakdown',s.cost_breakdown,
+                'projectedMarginPerSc',s.projected_margin_per_sc::text,
+                'purchaseTerms',CASE WHEN pct.contract_id IS NULL THEN NULL ELSE jsonb_build_object(
+                  'externalNumber',pct.external_number,
+                  'cropYear',pct.crop_year,
+                  'signedOn',pct.signed_on,
+                  'pickupLocation',pct.pickup_location,
+                  'deliveryCondition',pct.delivery_condition,
+                  'freightPayer',pct.freight_payer,
+                  'weighingResponsibility',pct.weighing_responsibility,
+                  'qualityTerms',pct.quality_terms,
+                  'requiredDocuments',pct.required_documents,
+                  'paymentTerms',pct.payment_terms,
+                  'termsVersion',pct.version
+                ) END,
+                'status',c.status),
+              $5
+         FROM app.contracts c
+         JOIN app.offers o ON (o.tenant_id,o.id)=(c.tenant_id,c.offer_id)
+         JOIN app.pricing_scenarios s
+           ON (s.tenant_id,s.offer_id)=(o.tenant_id,o.id) AND s.is_current=true
+         LEFT JOIN app.purchase_contract_terms pct
+           ON (pct.tenant_id,pct.contract_id)=(c.tenant_id,c.id)
+        WHERE c.tenant_id=$1 AND c.id=$2
+       RETURNING version_number`,
+      [tenantId, contractId, changeType, reason, actorId]);
+    return result.rows[0]!.version_number;
   }
 
   private async record(client: PoolClient, tenantId: string, actorId: string, eventType: string,

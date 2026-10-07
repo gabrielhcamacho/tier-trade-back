@@ -23,6 +23,17 @@ export const salesContractSchema = z.object({
   path: ['deliveryEnd'], message: 'Delivery end must not precede delivery start.',
 });
 
+export const salesContractStatusTransitionSchema = z.object({
+  status: z.enum(['AWAITING_SIGNATURE', 'SIGNED', 'ACTIVE', 'CLOSED', 'CANCELLED']),
+  reason: z.string().trim().min(3).max(500).nullable().default(null),
+});
+
+export const salesContractAmendmentSchema = z.object({
+  reason: z.string().trim().min(3).max(1000),
+  effectiveOn: date,
+  terms: salesContractSchema,
+});
+
 export const allocationSchema = z.object({
   salesContractId: z.uuid(),
   lotId: z.uuid(),
@@ -84,6 +95,8 @@ export const inventoryCountSchema = z.object({
 });
 
 export type SalesContractInput = z.infer<typeof salesContractSchema>;
+export type SalesContractStatusTransitionInput = z.infer<typeof salesContractStatusTransitionSchema>;
+export type SalesContractAmendmentInput = z.infer<typeof salesContractAmendmentSchema>;
 export type AllocationInput = z.infer<typeof allocationSchema>;
 export type DispatchInput = z.infer<typeof dispatchSchema>;
 export type InventoryLocationInput = z.infer<typeof inventoryLocationSchema>;
