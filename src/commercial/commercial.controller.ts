@@ -8,6 +8,7 @@ import {
   createCounterpartySchema,
   createOfferSchema,
   marginPolicySchema,
+  purchaseContractTermsSchema,
   updateContractObligationSchema,
   updateCounterpartyProfileSchema,
   type CancelOfferInput,
@@ -15,6 +16,7 @@ import {
   type CreateCounterpartyInput,
   type CreateOfferInput,
   type MarginPolicyInput,
+  type PurchaseContractTermsInput,
   type UpdateContractObligationInput,
   type UpdateCounterpartyProfileInput,
 } from './commercial.schemas.js';
@@ -54,6 +56,11 @@ export class CommercialController {
   @Get('offers')
   offers(@Identity() identity: RequestIdentity) {
     return this.service.listOffers(identity.tenantId, identity.actorId);
+  }
+
+  @Get('offers/:offerId')
+  offer(@Identity() identity: RequestIdentity, @Param('offerId', ParseUUIDPipe) offerId: string) {
+    return this.service.offerDetail(identity.tenantId, identity.actorId, offerId);
   }
 
   @Put('offers/:offerId')
@@ -100,6 +107,13 @@ export class CommercialController {
   summary(@Identity() identity: RequestIdentity,
     @Param('contractId', ParseUUIDPipe) contractId: string) {
     return this.service.contractSummary(identity.tenantId, identity.actorId, contractId);
+  }
+
+  @Put('contracts/:contractId/purchase-terms')
+  savePurchaseTerms(@Identity() identity: RequestIdentity,
+    @Param('contractId', ParseUUIDPipe) contractId: string,
+    @Body(new SchemaPipe(purchaseContractTermsSchema)) input: PurchaseContractTermsInput) {
+    return this.service.savePurchaseTerms(identity.tenantId, identity.actorId, contractId, input);
   }
 
   @Post('contracts/:contractId/obligations')

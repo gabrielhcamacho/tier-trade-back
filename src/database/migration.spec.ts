@@ -45,6 +45,7 @@ describe('commercial foundation migration', () => {
       '20261005160901_cover_operational_completeness_foreign_keys.sql',
       '20261005161634_demo_reset_operational_completeness.sql',
       '20261005213800_contract_obligation_workflow.sql',
+      '20261007205930_purchase_contract_terms.sql',
     ]) {
       const migration = await readFile(new URL(`../../supabase/migrations/${migrationName}`, import.meta.url), 'utf8');
       await db.exec(migration);
@@ -130,6 +131,10 @@ describe('commercial foundation migration', () => {
     }
     const visibleSalesVersions = await db.query<{ count: number }>('SELECT count(*)::int AS count FROM app.sales_contract_versions');
     expect(visibleSalesVersions.rows).toEqual([{ count: 0 }]);
+    const visiblePurchaseTerms = await db.query<{ count: number }>(
+      'SELECT count(*)::int AS count FROM app.purchase_contract_terms',
+    );
+    expect(visiblePurchaseTerms.rows).toEqual([{ count: 0 }]);
     await db.exec('RESET ROLE');
     const runtimePrivileges = await db.query<{ can_update: boolean }>(
       "SELECT has_table_privilege('tier_trade_runtime','app.financial_events','UPDATE') AS can_update",

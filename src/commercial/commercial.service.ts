@@ -10,6 +10,7 @@ import type {
   CreateCounterpartyInput,
   CreateOfferInput,
   MarginPolicyInput,
+  PurchaseContractTermsInput,
   UpdateContractObligationInput,
   UpdateCounterpartyProfileInput,
 } from './commercial.schemas.js';
@@ -135,6 +136,51 @@ export class CommercialService {
           WHERE o.tenant_id=$1
           ORDER BY o.created_at DESC,o.id DESC`, [tenantId]);
       return { tenant: { legalName: tenant.legal_name, isDemo: tenant.is_demo }, items: result.rows };
+    });
+  }
+
+  async offerDetail(tenantId: string, actorId: string, offerId: string) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertMember(client, tenantId, actorId);
+      const result = await client.query<{
+        id: string; status: string; counterparty_id: string; commodity: string; unit: string;
+        quantity_sc: string; delivery_start: string; delivery_end: string;
+        purchase_price_per_sc: string; sale_reference_per_sc: string;
+        total_costs_per_sc: string; projected_margin_per_sc: string;
+        cost_breakdown: Array<{ code: string; amountPerSc: string }>;
+        scenario_version: number; policy_version: number;
+        approval_id: string | null; approval_status: string | null; contract_id: string | null;
+      }>(
+        `SELECT o.id,o.status,o.counterparty_id,o.commodity,o.unit,o.quantity_sc,
+                o.delivery_start::text,o.delivery_end::text,
+                s.purchase_price_per_sc,s.sale_reference_per_sc,s.total_costs_per_sc,
+                s.projected_margin_per_sc,s.cost_breakdown,s.version AS scenario_version,
+                s.policy_version,
+                a.id AS approval_id,a.status AS approval_status,c.id AS contract_id
+           FROM app.offers o
+           JOIN app.pricing_scenarios s
+             ON (s.tenant_id,s.offer_id)=(o.tenant_id,o.id) AND s.is_current=true
+           LEFT JOIN LATERAL (
+             SELECT id,status FROM app.approvals
+              WHERE tenant_id=o.tenant_id AND offer_id=o.id
+              ORDER BY requested_at DESC,id DESC LIMIT 1
+           ) a ON true
+           LEFT JOIN app.contracts c ON (c.tenant_id,c.offer_id)=(o.tenant_id,o.id)
+          WHERE o.tenant_id=$1 AND o.id=$2`, [tenantId, offerId]);
+      const row = result.rows[0];
+      if (!row) throw new NotFoundException({ code: 'OFFER_NOT_FOUND' });
+      return {
+        offerId: row.id, status: row.status, counterpartyId: row.counterparty_id,
+        commodity: row.commodity, unit: row.unit, quantitySc: row.quantity_sc,
+        deliveryStart: row.delivery_start, deliveryEnd: row.delivery_end,
+        purchasePricePerSc: row.purchase_price_per_sc,
+        saleReferencePerSc: row.sale_reference_per_sc, costs: row.cost_breakdown,
+        pricing: { totalCostsPerSc: row.total_costs_per_sc,
+          projectedMarginPerSc: row.projected_margin_per_sc },
+        scenarioVersion: row.scenario_version, policyVersion: row.policy_version,
+        approval: row.approval_id ? { id: row.approval_id, status: row.approval_status } : null,
+        contractId: row.contract_id,
+      };
     });
   }
 
@@ -392,6 +438,20 @@ export class CommercialService {
                 o.delivery_start::text AS delivery_start, o.delivery_end::text AS delivery_end,
                 s.purchase_price_per_sc, s.sale_reference_per_sc, s.total_costs_per_sc,
                 s.projected_margin_per_sc, s.policy_version,
+                CASE WHEN pct.contract_id IS NULL THEN NULL ELSE jsonb_build_object(
+                  'externalNumber', pct.external_number,
+                  'cropYear', pct.crop_year,
+                  'signedOn', pct.signed_on,
+                  'pickupLocation', pct.pickup_location,
+                  'deliveryCondition', pct.delivery_condition,
+                  'freightPayer', pct.freight_payer,
+                  'weighingResponsibility', pct.weighing_responsibility,
+                  'qualityTerms', pct.quality_terms,
+                  'requiredDocuments', pct.required_documents,
+                  'paymentTerms', pct.payment_terms,
+                  'version', pct.version,
+                  'updatedAt', pct.updated_at
+                ) END AS purchase_terms,
                 COALESCE(load_totals.load_count,0)::integer AS load_count,
                 COALESCE(jsonb_agg(jsonb_build_object(
                   'id', ob.id,
@@ -412,6 +472,8 @@ export class CommercialService {
            FROM app.contracts c
            JOIN app.offers o ON (o.tenant_id,o.id)=(c.tenant_id,c.offer_id)
            JOIN app.pricing_scenarios s ON (s.tenant_id,s.offer_id)=(o.tenant_id,o.id) AND s.is_current=true
+           LEFT JOIN app.purchase_contract_terms pct
+             ON (pct.tenant_id,pct.contract_id)=(c.tenant_id,c.id)
            LEFT JOIN LATERAL (
              SELECT count(*)::integer AS load_count
                FROM app.loads l
@@ -421,9 +483,59 @@ export class CommercialService {
           WHERE c.tenant_id=$1 AND c.id=$2
           GROUP BY c.id,c.status,o.commodity,o.unit,o.quantity_sc,o.delivery_start,o.delivery_end,
                    s.purchase_price_per_sc,s.sale_reference_per_sc,s.total_costs_per_sc,
-                   s.projected_margin_per_sc,s.policy_version,load_totals.load_count`, [tenantId, contractId]);
+                   s.projected_margin_per_sc,s.policy_version,load_totals.load_count,
+                   pct.contract_id,pct.external_number,pct.crop_year,pct.signed_on,
+                   pct.pickup_location,pct.delivery_condition,pct.freight_payer,
+                   pct.weighing_responsibility,pct.quality_terms,pct.required_documents,
+                   pct.payment_terms,pct.version,pct.updated_at`, [tenantId, contractId]);
       if (!result.rows[0]) throw new NotFoundException({ code: 'CONTRACT_NOT_FOUND' });
       return result.rows[0];
+    });
+  }
+
+  async savePurchaseTerms(tenantId: string, actorId: string, contractId: string,
+    input: PurchaseContractTermsInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'COMMERCIAL_EDIT');
+      const contract = await client.query<{ status: string }>(
+        'SELECT status FROM app.contracts WHERE tenant_id=$1 AND id=$2 FOR UPDATE',
+        [tenantId, contractId],
+      );
+      if (!contract.rows[0]) throw new NotFoundException({ code: 'CONTRACT_NOT_FOUND' });
+      if (contract.rows[0].status !== 'ACTIVE') throw new ConflictException({ code: 'CONTRACT_NOT_ACTIVE' });
+      const before = await client.query(
+        'SELECT * FROM app.purchase_contract_terms WHERE tenant_id=$1 AND contract_id=$2 FOR UPDATE',
+        [tenantId, contractId],
+      );
+      const previous = before.rows[0] ?? null;
+      if ((previous?.version ?? 0) !== input.expectedVersion) {
+        throw new ConflictException({ code: 'PURCHASE_TERMS_VERSION_CONFLICT' });
+      }
+      const values = [tenantId, contractId, input.externalNumber, input.cropYear, input.signedOn,
+        input.pickupLocation, input.deliveryCondition, input.freightPayer, input.weighingResponsibility,
+        input.qualityTerms, input.requiredDocuments, input.paymentTerms, actorId];
+      const saved = await client.query(
+        `INSERT INTO app.purchase_contract_terms
+          (tenant_id,contract_id,external_number,crop_year,signed_on,pickup_location,
+           delivery_condition,freight_payer,weighing_responsibility,quality_terms,
+           required_documents,payment_terms,created_by,updated_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13)
+         ON CONFLICT (tenant_id,contract_id) DO UPDATE SET
+           external_number=excluded.external_number,crop_year=excluded.crop_year,
+           signed_on=excluded.signed_on,pickup_location=excluded.pickup_location,
+           delivery_condition=excluded.delivery_condition,freight_payer=excluded.freight_payer,
+           weighing_responsibility=excluded.weighing_responsibility,quality_terms=excluded.quality_terms,
+           required_documents=excluded.required_documents,payment_terms=excluded.payment_terms,
+           updated_by=excluded.updated_by,updated_at=now(),version=app.purchase_contract_terms.version+1
+         RETURNING external_number AS "externalNumber",crop_year AS "cropYear",signed_on AS "signedOn",
+           pickup_location AS "pickupLocation",delivery_condition AS "deliveryCondition",
+           freight_payer AS "freightPayer",weighing_responsibility AS "weighingResponsibility",
+           quality_terms AS "qualityTerms",required_documents AS "requiredDocuments",
+           payment_terms AS "paymentTerms",version,updated_at AS "updatedAt"`, values,
+      );
+      await this.record(client, tenantId, actorId, 'contract.purchase_terms_saved', 'contract', contractId,
+        { before: previous, after: saved.rows[0] });
+      return saved.rows[0];
     });
   }
 

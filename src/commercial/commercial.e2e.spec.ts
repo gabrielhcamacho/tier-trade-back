@@ -61,6 +61,7 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     await setup.query(await readFile(new URL('../../supabase/migrations/20261005160901_cover_operational_completeness_foreign_keys.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261005161634_demo_reset_operational_completeness.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261005213800_contract_obligation_workflow.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261007205930_purchase_contract_terms.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../scripts/seed-local.sql', import.meta.url), 'utf8'));
     await setup.end();
 
@@ -141,6 +142,14 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
       expect.objectContaining({ id: offer.offerId, counterparty_name: counterparty.json().legalName,
         commodity: 'MILHO', status: 'DRAFT' }),
     ]));
+    const offerDetail = await server.inject({ method: 'GET', url: `/v1/offers/${offer.offerId}`, headers: identityHeaders });
+    expect(offerDetail.statusCode).toBe(200);
+    expect(offerDetail.json()).toMatchObject({
+      offerId: offer.offerId, status: 'DRAFT', counterpartyId: counterparty.json().id,
+      quantitySc: '10000.000000', purchasePricePerSc: '60.000000',
+      costs: offerInput.costs, scenarioVersion: 1, policyVersion: 2,
+      approval: null, contractId: null,
+    });
     const edited = await server.inject({
       method: 'PUT', url: `/v1/offers/${offer.offerId}`, headers: identityHeaders,
       payload: { ...offerInput, saleReferencePerSc: '68.00' },
@@ -149,6 +158,8 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     offer = edited.json();
     expect(offer).toMatchObject({ scenarioVersion: 2, policyVersion: 2 });
     expect(offer.pricing.projectedMarginPerSc).toBe('3.00');
+    const repricedDetail = await server.inject({ method: 'GET', url: `/v1/offers/${offer.offerId}`, headers: identityHeaders });
+    expect(repricedDetail.json()).toMatchObject({ scenarioVersion: 2, saleReferencePerSc: '68.000000' });
 
     const submitted = await server.inject({ method: 'POST', url: `/v1/offers/${offer.offerId}/submit`, headers: identityHeaders });
     expect(submitted.statusCode).toBe(201);
@@ -161,11 +172,62 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     const activated = await server.inject({ method: 'POST', url: `/v1/offers/${offer.offerId}/activate-contract`, headers: identityHeaders });
     expect(activated.statusCode).toBe(201);
     const contract = activated.json();
+    const convertedDetail = await server.inject({ method: 'GET', url: `/v1/offers/${offer.offerId}`, headers: identityHeaders });
+    expect(convertedDetail.json()).toMatchObject({
+      status: 'CONVERTED', contractId: contract.contractId,
+      approval: { id: approval.approvalId, status: 'APPROVED' },
+    });
 
     const summary = await server.inject({ method: 'GET', url: `/v1/contracts/${contract.contractId}/summary`, headers: identityHeaders });
     expect(summary.statusCode).toBe(200);
     expect(summary.json()).toMatchObject({ status: 'ACTIVE' });
     expect(summary.json().obligations).toHaveLength(2);
+    expect(summary.json().purchase_terms).toBeNull();
+
+    const termsInput = {
+      expectedVersion: 0,
+      externalNumber: 'COMPRA-TESTE-01',
+      cropYear: '2025/26',
+      signedOn: '2026-10-06',
+      pickupLocation: 'Fazenda Teste, MT',
+      deliveryCondition: 'Sobre rodas',
+      freightPayer: 'BUYER',
+      weighingResponsibility: 'Vendedor',
+      qualityTerms: 'Classificação por carga; descontos sujeitos a tabela homologada.',
+      requiredDocuments: 'NF, romaneio e laudo de classificação.',
+      paymentTerms: 'Pagamento por carga conforme conferência documental.',
+    };
+    const savedTerms = await server.inject({
+      method: 'PUT', url: `/v1/contracts/${contract.contractId}/purchase-terms`,
+      headers: identityHeaders, payload: termsInput,
+    });
+    expect(savedTerms.statusCode, savedTerms.body).toBe(200);
+    expect(savedTerms.json()).toMatchObject({ externalNumber: termsInput.externalNumber, version: 1 });
+    const staleTerms = await server.inject({
+      method: 'PUT', url: `/v1/contracts/${contract.contractId}/purchase-terms`,
+      headers: identityHeaders, payload: termsInput,
+    });
+    expect(staleTerms.statusCode).toBe(409);
+    const revisedTerms = await server.inject({
+      method: 'PUT', url: `/v1/contracts/${contract.contractId}/purchase-terms`,
+      headers: identityHeaders,
+      payload: { ...termsInput, expectedVersion: 1, requiredDocuments: 'NF, romaneio, laudo e CT-e.' },
+    });
+    expect(revisedTerms.statusCode, revisedTerms.body).toBe(200);
+    expect(revisedTerms.json()).toMatchObject({ version: 2, requiredDocuments: 'NF, romaneio, laudo e CT-e.' });
+    const isolatedTerms = await server.inject({
+      method: 'PUT', url: `/v1/contracts/${contract.contractId}/purchase-terms`,
+      headers: { ...identityHeaders, 'x-tenant-id': '99999999-9999-4999-8999-999999999999' },
+      payload: termsInput,
+    });
+    expect(isolatedTerms.statusCode).toBe(404);
+    const termsSummary = await server.inject({
+      method: 'GET', url: `/v1/contracts/${contract.contractId}/summary`, headers: identityHeaders,
+    });
+    expect(termsSummary.json().purchase_terms).toMatchObject({
+      externalNumber: termsInput.externalNumber, cropYear: termsInput.cropYear, version: 2,
+    });
+    expect(termsSummary.json().purchase_price_per_sc).toBe('60.000000');
 
     const createdObligation = await server.inject({
       method: 'POST', url: `/v1/contracts/${contract.contractId}/obligations`, headers: identityHeaders,
@@ -503,7 +565,7 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
 
     const processor = app.get(OutboxProcessor);
     const firstPass = await processor.processTenant(identityHeaders['x-tenant-id']);
-    expect(firstPass).toMatchObject({ claimed: 23, published: 23, failed: 0, recovered: 0, pending: 0 });
+    expect(firstPass).toMatchObject({ claimed: 25, published: 25, failed: 0, recovered: 0, pending: 0 });
     expect(await processor.processTenant(identityHeaders['x-tenant-id'])).toMatchObject({
       claimed: 0, published: 0, failed: 0, recovered: 0, pending: 0,
     });
@@ -526,7 +588,7 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
         WHERE tenant_id=$1 AND aggregate_id=$2 AND event_type='offer.cancelled'`,
       [identityHeaders['x-tenant-id'], cancellableOffer.offerId],
     );
-    expect(activity.rows[0]?.count).toBe('23');
+    expect(activity.rows[0]?.count).toBe('25');
     expect(projection.rows[0]?.projected_margin_per_sc).toBe('3.000000');
     expect(projection.rows[0]?.obligations).toHaveLength(3);
     expect(cancellationAudit.rows[0]?.payload).toEqual({

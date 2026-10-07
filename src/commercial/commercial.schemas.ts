@@ -69,3 +69,19 @@ export type MarginPolicyInput = z.infer<typeof marginPolicySchema>;
 export type UpdateCounterpartyProfileInput = z.infer<typeof updateCounterpartyProfileSchema>;
 export type CreateContractObligationInput = z.infer<typeof createContractObligationSchema>;
 export type UpdateContractObligationInput = z.infer<typeof updateContractObligationSchema>;
+
+export const purchaseContractTermsSchema = z.object({
+  expectedVersion: z.number().int().nonnegative(),
+  externalNumber: z.string().trim().min(1).max(80),
+  cropYear: z.string().trim().min(3).max(30),
+  signedOn: localDate.nullable(),
+  pickupLocation: z.string().trim().min(3).max(240).nullable(),
+  deliveryCondition: z.string().trim().min(3).max(160).nullable(),
+  freightPayer: z.enum(['BUYER', 'SELLER', 'THIRD_PARTY']).nullable(),
+  weighingResponsibility: z.string().trim().min(3).max(240).nullable(),
+  qualityTerms: z.string().trim().min(3).max(2000).nullable(),
+  requiredDocuments: z.string().trim().min(3).max(2000).nullable(),
+  paymentTerms: z.string().trim().min(3).max(2000).nullable(),
+});
+
+export type PurchaseContractTermsInput = z.infer<typeof purchaseContractTermsSchema>;
