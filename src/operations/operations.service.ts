@@ -28,6 +28,7 @@ interface ContractForScheduling {
 interface LoadRow {
   id: string;
   contract_id: string;
+  contract_version_number: number;
   scheduled_at: Date;
   expected_weight_kg: string;
   vehicle_plate: string;
@@ -333,7 +334,7 @@ export class OperationsService {
       );
       if (!contract.rows[0]) throw new NotFoundException({ code: 'CONTRACT_NOT_FOUND' });
       const result = await client.query<LoadRow & { received_weight_kg: string }>(
-        `SELECT l.id,l.contract_id,l.scheduled_at,l.expected_weight_kg,l.vehicle_plate,
+        `SELECT l.id,l.contract_id,l.contract_version_number,l.scheduled_at,l.expected_weight_kg,l.vehicle_plate,
                 l.carrier_name,l.destination_code,l.status,l.created_at,
                 COALESCE(r.accepted_weight_kg,r.net_weight_kg,0)::text AS received_weight_kg
            FROM app.loads l
@@ -372,7 +373,7 @@ export class OperationsService {
         yard_location_code: string | null;
         open_occurrences: number;
       }>(
-        `SELECT l.id,l.contract_id,l.scheduled_at,l.expected_weight_kg,l.vehicle_plate,
+        `SELECT l.id,l.contract_id,l.contract_version_number,l.scheduled_at,l.expected_weight_kg,l.vehicle_plate,
                 l.carrier_name,l.destination_code,l.status,l.created_at,t.timezone,
                 yard.event_type AS yard_state,yard.occurred_at AS yard_occurred_at,
                 yard.location_code AS yard_location_code,
@@ -975,6 +976,7 @@ export class OperationsService {
     return {
       id: row.id,
       contractId: row.contract_id,
+      contractVersionNumber: row.contract_version_number,
       scheduledAt: row.scheduled_at.toISOString(),
       timezone,
       expectedWeightKg: row.expected_weight_kg,

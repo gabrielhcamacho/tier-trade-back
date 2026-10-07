@@ -17,7 +17,9 @@ type FinancialEventRow = {
   direction: 'INFLOW' | 'OUTFLOW';
   source_id: string;
   sales_contract_id: string | null;
+  sales_contract_version_number: number | null;
   purchase_contract_id: string | null;
+  purchase_contract_version_number: number | null;
   load_id: string | null;
   load_receipt_id: string | null;
   contract_reference: string | null;
@@ -87,7 +89,8 @@ export class FinanceService extends FinancialProjectionPort {
         'SELECT legal_name,is_demo,demo_seed_version FROM app.tenants WHERE id=$1', [tenantId]);
       const events = await client.query<FinancialEventRow>(
         `SELECT fe.id,fe.event_type,fe.direction,fe.source_id,fe.sales_contract_id,
-                fe.purchase_contract_id,fe.load_id,fe.load_receipt_id,
+                fe.sales_contract_version_number,fe.purchase_contract_id,l.contract_version_number AS purchase_contract_version_number,
+                fe.load_id,fe.load_receipt_id,
                 COALESCE(sc.reference,pc.id::text) AS contract_reference,
                 fe.counterparty_id,cp.legal_name AS counterparty_name,
                 fe.fiscal_authority_id AS authority_id,fa.legal_name AS authority_name,
@@ -105,6 +108,8 @@ export class FinanceService extends FinancialProjectionPort {
              ON (sc.tenant_id,sc.id)=(fe.tenant_id,fe.sales_contract_id)
            LEFT JOIN app.contracts pc
              ON (pc.tenant_id,pc.id)=(fe.tenant_id,fe.purchase_contract_id)
+           LEFT JOIN app.loads l
+             ON (l.tenant_id,l.id)=(fe.tenant_id,fe.load_id)
            LEFT JOIN app.counterparties cp
              ON (cp.tenant_id,cp.id)=(fe.tenant_id,fe.counterparty_id)
            LEFT JOIN app.fiscal_authorities fa
@@ -196,7 +201,9 @@ export class FinanceService extends FinancialProjectionPort {
           direction: row.direction,
           sourceId: row.source_id,
           salesContractId: row.sales_contract_id,
+          salesContractVersionNumber: row.sales_contract_version_number,
           purchaseContractId: row.purchase_contract_id,
+          purchaseContractVersionNumber: row.purchase_contract_version_number,
           loadId: row.load_id,
           loadReceiptId: row.load_receipt_id,
           contractReference: row.contract_reference,

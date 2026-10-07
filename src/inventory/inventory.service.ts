@@ -16,6 +16,7 @@ interface LotPositionRow {
   lot_code: string;
   source_load_id: string;
   contract_id: string;
+  contract_version_number: number;
   location_code: string;
   location_name: string;
   commodity: string;
@@ -54,6 +55,7 @@ interface MovementRow {
 const salesContractsSql = `SELECT sc.id,sc.counterparty_id,sc.reference,sc.commodity,sc.quantity_kg::text,
     sc.sale_price_per_kg::text,sc.destination_code,sc.delivery_start::text,sc.delivery_end::text,
     sc.required_documents,sc.payment_term_days,sc.status,cp.legal_name AS counterparty_name,
+    COALESCE(v.version_number,1)::integer AS version_number,
     COALESCE(a.allocated_kg,0)::text AS allocated_kg,
     COALESCE(a.dispatched_kg,0)::text AS dispatched_kg
   FROM app.sales_contracts sc
@@ -69,6 +71,11 @@ const salesContractsSql = `SELECT sc.id,sc.counterparty_id,sc.reference,sc.commo
          GROUP BY ia.id,ia.quantity_kg,ia.status
       ) x
   ) a ON true
+  LEFT JOIN LATERAL (
+    SELECT max(scv.version_number)::integer AS version_number
+      FROM app.sales_contract_versions scv
+     WHERE scv.tenant_id=sc.tenant_id AND scv.sales_contract_id=sc.id
+  ) v ON true
  WHERE sc.tenant_id=$1 ORDER BY sc.created_at DESC,sc.id DESC`;
 
 @Injectable()
@@ -92,7 +99,7 @@ export class InventoryService extends InventoryReceiptPort {
         [tenantId],
       );
       const lots = await client.query<LotPositionRow>(
-        `SELECT lot.id,lot.lot_code,lot.source_load_id,lot.contract_id,
+        `SELECT lot.id,lot.lot_code,lot.source_load_id,lot.contract_id,l.contract_version_number,
                 loc.code AS location_code,loc.name AS location_name,lot.commodity,lot.status,
                 lot.ownership_status,lot.risk_status,lot.custody_status,
                 lot.owner_counterparty_id,owner.legal_name AS owner_counterparty_name,
@@ -125,7 +132,7 @@ export class InventoryService extends InventoryReceiptPort {
               WHERE a.tenant_id=lot.tenant_id AND a.lot_id=lot.id AND a.status='ACTIVE'
            ) allocation_totals ON true
           WHERE lot.tenant_id=$1
-          GROUP BY lot.id,lot.lot_code,lot.source_load_id,lot.contract_id,loc.code,loc.name,
+          GROUP BY lot.id,lot.lot_code,lot.source_load_id,lot.contract_id,l.contract_version_number,loc.code,loc.name,
                    lot.commodity,lot.status,lot.ownership_status,lot.risk_status,
                    lot.custody_status,lot.owner_counterparty_id,owner.legal_name,
                    lot.custodian_counterparty_id,custodian.legal_name,
@@ -158,7 +165,7 @@ export class InventoryService extends InventoryReceiptPort {
         .reduce((total, row) => total.plus(row.quantity_kg), new Decimal(0));
       const salesContracts = await client.query(salesContractsSql, [tenantId]);
       const allocations = await client.query(
-        `SELECT a.id,a.sales_contract_id,a.lot_id,a.quantity_kg::text,a.status,a.created_at,
+        `SELECT a.id,a.sales_contract_id,a.sales_contract_version_number,a.lot_id,a.quantity_kg::text,a.status,a.created_at,
                 sc.reference AS contract_reference,lot.lot_code,
                 COALESCE(sum(d.quantity_kg),0)::text AS dispatched_kg
            FROM app.inventory_allocations a
@@ -166,10 +173,10 @@ export class InventoryService extends InventoryReceiptPort {
            JOIN app.inventory_lots lot ON (lot.tenant_id,lot.id)=(a.tenant_id,a.lot_id)
            LEFT JOIN app.inventory_dispatches d ON (d.tenant_id,d.allocation_id)=(a.tenant_id,a.id)
           WHERE a.tenant_id=$1
-          GROUP BY a.id,a.sales_contract_id,a.lot_id,a.quantity_kg,a.status,a.created_at,sc.reference,lot.lot_code
+          GROUP BY a.id,a.sales_contract_id,a.sales_contract_version_number,a.lot_id,a.quantity_kg,a.status,a.created_at,sc.reference,lot.lot_code
           ORDER BY a.created_at DESC,a.id DESC`, [tenantId]);
       const dispatches = await client.query(
-        `SELECT d.id,d.allocation_id,d.quantity_kg::text,d.dispatched_at,d.vehicle_plate,
+        `SELECT d.id,d.allocation_id,a.sales_contract_version_number,d.quantity_kg::text,d.dispatched_at,d.vehicle_plate,
                 d.document_reference,d.notes,d.created_at,sc.reference AS contract_reference,lot.lot_code
            FROM app.inventory_dispatches d
            JOIN app.inventory_allocations a ON (a.tenant_id,a.id)=(d.tenant_id,d.allocation_id)
@@ -221,6 +228,7 @@ export class InventoryService extends InventoryReceiptPort {
           lotCode: row.lot_code,
           sourceLoadId: row.source_load_id,
           contractId: row.contract_id,
+          contractVersionNumber: row.contract_version_number,
           location: { code: row.location_code, name: row.location_name },
           commodity: row.commodity,
           status: row.status,

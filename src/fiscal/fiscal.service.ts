@@ -15,6 +15,7 @@ import { calculateFiscalMemory, type FiscalCalculationComponent } from './fiscal
 
 type FiscalDocumentRow = {
   id: string; financial_event_id: string; source_id: string; sales_contract_id: string;
+  sales_contract_version_number: number;
   contract_reference: string; counterparty_name: string; dispatch_reference: string;
   document_number: string; access_key: string | null; issued_at: Date; total_amount: string;
   expected_amount: string | null; status: string; validation_notes: string | null;
@@ -66,6 +67,7 @@ type FiscalObligationRow = {
 
 type PurchaseFiscalDocumentRow = {
   id: string; financial_event_id: string; purchase_contract_id: string; load_id: string;
+  contract_version_number: number;
   load_receipt_id: string; counterparty_name: string; document_number: string;
   access_key: string | null; issued_at: Date; total_amount: string; expected_amount: string | null;
   due_date: string; payable_title_number: string; status: string; validation_notes: string | null;
@@ -90,6 +92,7 @@ export class FiscalService {
       }>('SELECT legal_name,is_demo,demo_seed_version FROM app.tenants WHERE id=$1', [tenantId]);
       const documents = await client.query<FiscalDocumentRow>(
         `SELECT fd.id,fd.financial_event_id,fd.source_id,fd.sales_contract_id,
+                fe.sales_contract_version_number,
                 sc.reference AS contract_reference,cp.legal_name AS counterparty_name,
                 d.document_reference AS dispatch_reference,fd.document_number,fd.access_key,
                 fd.issued_at,fd.total_amount::text,fe.calculated_amount::text AS expected_amount,
@@ -128,6 +131,7 @@ export class FiscalService {
           ORDER BY fe.created_at DESC`, [tenantId]);
       const purchaseDocuments = await client.query<PurchaseFiscalDocumentRow>(
         `SELECT fd.id,fd.financial_event_id,fd.purchase_contract_id,fd.load_id,fd.load_receipt_id,
+                l.contract_version_number,
                 cp.legal_name AS counterparty_name,fd.document_number,fd.access_key,fd.issued_at,
                 fd.total_amount::text,fe.calculated_amount::text AS expected_amount,
                 fd.due_date::text,fd.payable_title_number,fd.status,fd.validation_notes,
@@ -272,7 +276,8 @@ export class FiscalService {
         documents: mapped,
         purchaseDocuments: purchaseDocuments.rows.map((row) => ({
           id: row.id, financialEventId: row.financial_event_id,
-          purchaseContractId: row.purchase_contract_id, loadId: row.load_id,
+          purchaseContractId: row.purchase_contract_id,
+          contractVersionNumber: row.contract_version_number, loadId: row.load_id,
           loadReceiptId: row.load_receipt_id, counterpartyName: row.counterparty_name,
           commodity: row.commodity, documentNumber: row.document_number,
           invoiceSeries: row.inbound_invoice_series, accessKey: row.access_key,
@@ -938,7 +943,8 @@ export class FiscalService {
     const total = new Decimal(row.total_amount);
     return {
       id: row.id, financialEventId: row.financial_event_id, sourceId: row.source_id,
-      salesContractId: row.sales_contract_id, contractReference: row.contract_reference,
+      salesContractId: row.sales_contract_id, salesContractVersionNumber: row.sales_contract_version_number,
+      contractReference: row.contract_reference,
       counterpartyName: row.counterparty_name, dispatchReference: row.dispatch_reference,
       documentType: 'NFE', direction: 'OUTBOUND', documentNumber: row.document_number,
       accessKey: row.access_key, issuedAt: row.issued_at.toISOString(), totalAmount: row.total_amount,
