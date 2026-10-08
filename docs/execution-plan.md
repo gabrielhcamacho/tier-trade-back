@@ -43,6 +43,7 @@ Atualizado em 08/10/2026. Este documento é atualizado junto com cada entrega pa
 - D07: regra futura de preço a fixar e fixações parciais.
 - D08: matriz avançada de acesso por função e unidade.
 - D09: integrações externas efetivamente contratadas para produção.
+- D10: confirmar se a NF-e fiscal de compra deve obrigatoriamente manter o mesmo número e chave da NF-e do recebimento, e qual é o rito quando o documento de origem precisa ser corrigido. O backend atual não compara o número ao registrar o documento fiscal.
 
 ## Próxima sequência recomendada
 
@@ -78,8 +79,17 @@ Atualizado em 08/10/2026. Este documento é atualizado junto com cada entrega pa
 | Exploração dos relatórios na interface | Implementada e validada por compilação | Os relatórios de financeiro, fiscal, estoque e operações permitem consultar as mesmas categorias e filtros do CSV, abrir uma linha e examinar seus campos de origem. |
 | Navegação para objetos relacionados | Implementada e validada por compilação | Detalhes apontam para contrato, carga, recebível, lote ou cálculo fiscal quando existe tela correspondente, preservando a identidade do tenant nas consultas ao backend. |
 | Arquivos de documentos | Parcial, sem simulação | Referências de NF-e, tickets e documentos aparecem nos registros; o acesso ao arquivo depende de anexo efetivamente vinculado à operação de origem. Não há link fictício para PDF inexistente. |
-| Homologação autenticada em produção | Pendente | Abrir relatórios com a conta de demonstração e confirmar filtros, detalhe, vínculos e exportação em navegador após o deploy. |
+| Homologação autenticada em produção | Parcial | Conta demo abriu os quatro domínios, o detalhe financeiro chegou ao recebível, o detalhe fiscal chegou à carga, o filtro textual e de período funcionou e o CSV fiscal baixou com a linha esperada. Restam percorrer todas as categorias e resolver D10. |
 
 Publicação técnica: frontend `a037983` no GitHub e deploy `READY` na Vercel; a rota nova respondeu HTTP 200 com redirecionamento correto para login quando acessada sem autenticação. Plano versionado no repositório do backend. Essa checagem não substitui o teste autenticado do conteúdo.
 
-Próxima sequência técnica sem depender da JD: executar a homologação autenticada desses relatórios, corrigir eventuais vínculos sem tela de detalhe e completar a navegação até anexos realmente armazenados. Em paralelo, permanece pendente o aceite humano JD-01 a JD-04 e a parametrização D02 a D04; nenhuma regra financeira, fiscal ou de qualidade foi inferida nesta entrega.
+## Teste autenticado da conta demo em 07/10/2026
+
+- `financeiro/eventos`: dois registros carregados; a linha de venda abriu o detalhe e o vínculo chegou ao recebível com título, saldo e memória de cálculo.
+- `fiscal/entradas`: uma NF-e localizada por `NF-SMOKE`, zero registros no período de setembro e CSV exportado com a mesma NF-e e colunas esperadas. O detalhe trouxe a carga e o contrato relacionados.
+- `estoque/lotes`: dois lotes carregados; `operacoes/recebimentos`: três cargas carregadas. Não foi executada mutação de dados nesses testes.
+- falhas de apresentação identificadas e corrigidas no frontend: a rota de relatórios destacava incorretamente Comercial no menu, e valores/quantidades/datas eram exibidos em formato bruto. A formatação agora preserva as casas decimais originais sem arredondamento financeiro implícito.
+- ressalva de consistência da conta demo: o documento fiscal de entrada `NF-SMOKE-1161539417` aponta para a carga `d700...0003`, cuja tela mostra como NF-e do recebimento vigente `NF-DEMO-2026-0045`. A criação fiscal exige recebimento aceito e vigente, mas não compara o número informado com o número do recebimento. D10 deve ser decidido antes de impor bloqueio ou alterar registros de produção.
+- publicação da correção de apresentação: frontend `a94f2bf` em produção, deploy `READY`; conferência autenticada no navegador mostrou o submenu Fiscal e `R$ 52.575,00` na linha da NF-e filtrada. O build de produção, a tipagem, a verificação de ações de servidor e testes da formatação decimal passaram.
+
+Próxima sequência técnica sem depender da JD: publicar e conferir os ajustes de apresentação, percorrer as categorias restantes dos relatórios e completar a navegação até anexos realmente armazenados. Em paralelo, permanece pendente o aceite humano JD-01 a JD-04 e a parametrização D02 a D04; nenhuma regra financeira, fiscal ou de qualidade foi inferida nesta entrega.
