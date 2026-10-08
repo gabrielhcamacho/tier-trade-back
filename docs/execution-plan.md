@@ -104,3 +104,14 @@ Publicação técnica: frontend `a037983` no GitHub e deploy `READY` na Vercel; 
 Validação técnica desta entrega: tipagem, build de produção e verificação de ações de servidor aprovados. O frontend `9479a17` foi publicado no GitHub e a Vercel informou deploy de produção `READY` para esse commit. A conta demo abriu `/documentos` com zero arquivos reais e o detalhe da NF-e de entrada exibiu a ausência de anexo, além de links para a carga e o contrato onde é possível anexar. Nenhuma migration ou alteração de regra fiscal, financeira ou de tenant foi necessária. D10 continua pendente e os números da NF-e divergente da conta demo não foram modificados.
 
 Próxima sequência técnica sem depender da JD: testar upload e download real de um arquivo de ensaio em ambiente controlado ou com um documento de demonstração autorizado, ampliar cobertura automatizada dos vínculos dos anexos e paginar a consulta global de documentos para volumes maiores. Em paralelo, permanece pendente o aceite humano JD-01 a JD-04 e a parametrização D02 a D04; nenhuma regra financeira, fiscal ou de qualidade foi inferida nesta entrega.
+
+## Correção de navegação entre listas e detalhes em 08/10/2026
+
+| Atividade | Estado | Evidência ou limite |
+| --- | --- | --- |
+| Contratos: custos, entregas e demais subtelas | Implementada e validada por build | Linhas da carteira abrem o detalhe do contrato pelo topo, sem âncora automática nem troca para Operações. A subtela e os filtros de origem seguem na URL e no caminho de volta. |
+| Demais tabelas com âncora para outra página | Implementada e validada por build | A navegação compartilhada das linhas remove a âncora quando o destino é outra página e solicita rolagem ao topo. Detalhes expandidos na própria página de relatório preservam a âncora intencional. |
+| Navegação de terceiro nível | Implementada e validada por build | O detalhe de contrato mantém o submenu de Contratos, destaca a subtela de origem e oferece breadcrumb e retorno a ela; obrigações têm retorno específico. |
+| Voltar e feedback de navegação | Implementada e validada por build | Controle de voltar compartilhado redesenhado como botão de ícone discreto junto ao breadcrumb, inclusive no roteiro e nos relatórios. Aviso flutuante “Abrindo página…” removido; permanece somente a barra superior sutil de progresso. |
+
+Validação: tipagem, verificação de ações de servidor e build de produção aprovados. Sem alteração de banco, backend, regras de domínio ou dados da conta demo. Próxima verificação: conferir a navegação no deploy de produção com a conta demo, especialmente Contratos > Entregas > detalhe > voltar e Custos e margem > detalhe no topo. Seguem depois upload/download real de arquivo de ensaio autorizado, testes dos vínculos de anexos e paginação do arquivo transversal.
