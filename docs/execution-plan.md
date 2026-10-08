@@ -70,3 +70,14 @@ Atualizado em 08/10/2026. Este documento é atualizado junto com cada entrega pa
 - pendência de segurança externa ao pacote: a proteção contra senhas vazadas do Supabase Auth continua desativada e deve ser avaliada antes da abertura ampla do produto;
 - performance: índices recém-criados aparecem como ainda não utilizados, comportamento esperado antes do primeiro uso em produção; não foram removidos.
 - produção: rastreabilidade e modelo CSV responderam HTTP 200 no frontend; a prontidão do backend respondeu `ready` com banco `ok`.
+
+## Consulta navegável dos relatórios
+
+| Atividade | Estado | Critério de conclusão |
+| --- | --- | --- |
+| Exploração dos relatórios na interface | Implementada e validada por compilação | Os relatórios de financeiro, fiscal, estoque e operações permitem consultar as mesmas categorias e filtros do CSV, abrir uma linha e examinar seus campos de origem. |
+| Navegação para objetos relacionados | Implementada e validada por compilação | Detalhes apontam para contrato, carga, recebível, lote ou cálculo fiscal quando existe tela correspondente, preservando a identidade do tenant nas consultas ao backend. |
+| Arquivos de documentos | Parcial, sem simulação | Referências de NF-e, tickets e documentos aparecem nos registros; o acesso ao arquivo depende de anexo efetivamente vinculado à operação de origem. Não há link fictício para PDF inexistente. |
+| Homologação autenticada em produção | Pendente | Abrir relatórios com a conta de demonstração e confirmar filtros, detalhe, vínculos e exportação em navegador após o deploy. |
+
+Próxima sequência técnica sem depender da JD: executar a homologação autenticada desses relatórios, corrigir eventuais vínculos sem tela de detalhe e completar a navegação até anexos realmente armazenados. Em paralelo, permanece pendente o aceite humano JD-01 a JD-04 e a parametrização D02 a D04; nenhuma regra financeira, fiscal ou de qualidade foi inferida nesta entrega.
