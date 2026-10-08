@@ -66,6 +66,7 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     await setup.query(await readFile(new URL('../../supabase/migrations/20261007214032_commercial_demands_negotiations.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261007214736_cover_commercial_actor_foreign_keys_and_terms_rls.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261007222434_contract_lifecycle_and_version_references.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261008011332_bank_statement_import_batches.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../scripts/seed-local.sql', import.meta.url), 'utf8'));
     await setup.end();
 

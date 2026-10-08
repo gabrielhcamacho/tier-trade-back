@@ -66,6 +66,7 @@ describe.runIf(Boolean(databaseUrl))('canonical demo tenant seed', () => {
       '20261007214032_commercial_demands_negotiations.sql',
       '20261007214736_cover_commercial_actor_foreign_keys_and_terms_rls.sql',
       '20261007222434_contract_lifecycle_and_version_references.sql',
+      '20261008011332_bank_statement_import_batches.sql',
     ]) {
       await pool.query(await readFile(new URL(`../../supabase/migrations/${migrationName}`, import.meta.url), 'utf8'));
     }

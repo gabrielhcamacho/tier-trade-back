@@ -59,6 +59,7 @@ describe.runIf(Boolean(databaseUrl))('financial receivables', () => {
       '20261007214032_commercial_demands_negotiations.sql',
       '20261007214736_cover_commercial_actor_foreign_keys_and_terms_rls.sql',
       '20261007222434_contract_lifecycle_and_version_references.sql',
+      '20261008011332_bank_statement_import_batches.sql',
     ];
     for (const migration of migrations) {
       await setup.query(await readFile(new URL(`../../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
@@ -264,6 +265,52 @@ describe.runIf(Boolean(databaseUrl))('financial receivables', () => {
     });
     expect(title.statusCode).toBe(409);
     expect(title.json()).toMatchObject({ code: 'ROUNDING_POLICY_REQUIRED' });
+  });
+
+  it('imports bank statements idempotently and keeps batch traceability', async () => {
+    const server = app.getHttpAdapter().getInstance();
+    const account = await server.inject({
+      method: 'POST', url: '/v1/finance/bank-accounts', headers,
+      payload: { code: 'IMPORT01', name: 'Conta para importação' },
+    });
+    expect(account.statusCode, account.body).toBe(201);
+    const payload = {
+      bankAccountId: account.json().id,
+      sourceFormat: 'TIER_TRADE_CSV',
+      originalFileName: 'extrato-outubro.csv',
+      adapterVersion: 'tier-trade-csv-v1',
+      mapping: { data: 'occurredAt', direcao: 'direction', valor: 'amount', referencia: 'bankReference' },
+      entries: [
+        { sourceLineNumber: 2, occurredAt: '2026-10-08T09:30:00-03:00', direction: 'CREDIT',
+          amount: '12500.00', bankReference: 'PIX-IMPORT-001', description: 'Recebimento' },
+        { sourceLineNumber: 3, occurredAt: '2026-10-08T14:15:00-03:00', direction: 'DEBIT',
+          amount: '3200.50', bankReference: 'TED-IMPORT-002', description: 'Pagamento' },
+      ],
+    };
+    const imported = await server.inject({ method: 'POST', url: '/v1/finance/bank-statement-imports', headers, payload });
+    expect(imported.statusCode, imported.body).toBe(201);
+    expect(imported.json()).toMatchObject({ importedCount: 2, skippedCount: 0, alreadyImported: false });
+
+    const repeated = await server.inject({
+      method: 'POST', url: '/v1/finance/bank-statement-imports', headers,
+      payload: { ...payload, originalFileName: 'mesmo-conteudo-outro-nome.csv' },
+    });
+    expect(repeated.statusCode, repeated.body).toBe(201);
+    expect(repeated.json()).toMatchObject({
+      id: imported.json().id, importedCount: 2, skippedCount: 0, alreadyImported: true,
+    });
+
+    const workspace = await server.inject({ method: 'GET', url: '/v1/finance', headers });
+    expect(workspace.statusCode, workspace.body).toBe(200);
+    expect(workspace.json().governance).toMatchObject({
+      bankStatementImports: [expect.objectContaining({
+        id: imported.json().id, source_format: 'TIER_TRADE_CSV', imported_count: 2, skipped_count: 0,
+      })],
+    });
+    expect(workspace.json().governance.bankStatementEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ bank_reference: 'PIX-IMPORT-001', import_id: imported.json().id, source_line_number: 2 }),
+      expect.objectContaining({ bank_reference: 'TED-IMPORT-002', import_id: imported.json().id, source_line_number: 3 }),
+    ]));
   });
 
   it('lists document metadata and records its signature with audit and outbox events', async () => {

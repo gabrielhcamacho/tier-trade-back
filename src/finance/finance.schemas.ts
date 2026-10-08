@@ -63,6 +63,17 @@ export const createBankStatementEntrySchema = z.object({
   description: z.string().trim().min(1).max(500).nullable(),
 });
 
+export const importBankStatementSchema = z.object({
+  bankAccountId: z.uuid(),
+  sourceFormat: z.enum(['TIER_TRADE_CSV', 'NORMALIZED_JSON', 'OFX', 'CNAB240', 'CNAB400']),
+  originalFileName: z.string().trim().min(1).max(255).nullable(),
+  adapterVersion: z.string().trim().min(1).max(40),
+  mapping: z.record(z.string(), z.string()).default({}),
+  entries: z.array(createBankStatementEntrySchema.omit({ bankAccountId: true }).extend({
+    sourceLineNumber: z.number().int().positive(),
+  })).min(1).max(1000),
+});
+
 export const reconcileBankStatementEntrySchema = z.object({
   matchedType: z.enum(['SETTLEMENT', 'PAYMENT']),
   matchedId: z.uuid(),
@@ -96,6 +107,7 @@ export type ConfigureFinancePolicyInput = z.infer<typeof configureFinancePolicyS
 export type CreatePaymentBatchInput = z.infer<typeof createPaymentBatchSchema>;
 export type CreateBankAccountInput = z.infer<typeof createBankAccountSchema>;
 export type CreateBankStatementEntryInput = z.infer<typeof createBankStatementEntrySchema>;
+export type ImportBankStatementInput = z.infer<typeof importBankStatementSchema>;
 export type ReconcileBankStatementEntryInput = z.infer<typeof reconcileBankStatementEntrySchema>;
 export type CreateCommissionPolicyInput = z.infer<typeof createCommissionPolicySchema>;
 export type AccrueCommissionInput = z.infer<typeof accrueCommissionSchema>;

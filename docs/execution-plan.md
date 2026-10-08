@@ -51,3 +51,21 @@ Atualizado em 07/10/2026. Este documento é atualizado junto com cada entrega pa
 3. Parametrizar D02, D03 e D04 sem embutir regra específica da JD no código.
 4. Corrigir as ressalvas do aceite e fechar a homologação do piloto.
 5. Retomar preço a fixar e fixações parciais.
+
+## Pacote iniciado em 08/10/2026
+
+| Atividade | Estado | Critério de conclusão |
+| --- | --- | --- |
+| Filtros e detalhamento da rastreabilidade | Implementado e validado | Filtra compra/venda, commodity, situação e texto, exibindo o estágio de cada elo persistido; tipagem e build aprovados. |
+| Filtros de relatórios | Implementado e validado | Período e critério textual aplicados no servidor aos CSVs de financeiro, fiscal, estoque e operações; build aprovado. |
+| Importação bancária extensível | Implementada e validada | Lote auditável, idempotência por conteúdo, deduplicação por lançamento, histórico e adapter CSV inicial; base preservada para OFX/CNAB sem presumir layouts bancários. |
+| Validação e publicação do pacote | Em publicação | Migration aprovada no PostgreSQL isolado e aplicada em produção; 43 testes, tipagem e builds aprovados. Falta concluir e verificar os deploys do frontend e backend. |
+
+## Validação do pacote em 08/10/2026
+
+- frontend: tipagem e build de produção aprovados, incluindo filtros, modelo CSV e interface de importação;
+- backend: build aprovado e suíte completa com 43 testes aprovada no PostgreSQL do Colima no HD externo;
+- importação bancária: duas linhas importadas, repetição do mesmo conteúdo com outro nome reconhecida sem duplicação e origem por lote/linha preservada;
+- banco de produção: migration aplicada com RLS forçada e isolamento por tenant; o advisor de segurança não identificou ressalva na nova tabela;
+- pendência de segurança externa ao pacote: a proteção contra senhas vazadas do Supabase Auth continua desativada e deve ser avaliada antes da abertura ampla do produto;
+- performance: índices recém-criados aparecem como ainda não utilizados, comportamento esperado antes do primeiro uso em produção; não foram removidos.

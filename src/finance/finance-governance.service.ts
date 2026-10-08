@@ -1,13 +1,13 @@
 import { ConflictException, Inject, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import Decimal from 'decimal.js';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { DatabasePlatformPort } from '../database/database.js';
 import type {
   ConfigureFinancePolicyInput, CreateBankAccountInput, CreateBankStatementEntryInput,
   AccrueCommissionInput, CreateCommissionPolicyInput,
   CreatePaymentBatchInput, CreatePurchaseCostComponentInput, ReconcileBankStatementEntryInput,
-  ReverseSettlementInput,
+  ReverseSettlementInput, ImportBankStatementInput,
 } from './finance.schemas.js';
 
 @Injectable()
@@ -39,10 +39,16 @@ export class FinanceGovernanceService {
           WHERE tenant_id=$1 ORDER BY active DESC,code`, [tenantId]);
       const entries = await client.query(`SELECT bse.id,bse.bank_account_id,ba.code AS bank_account_code,bse.occurred_at,
           bse.direction,bse.amount::text,bse.bank_reference,bse.description,bse.status,
-          bse.matched_type,bse.matched_id,bse.matched_at
+          bse.matched_type,bse.matched_id,bse.matched_at,bse.import_id,bse.source_line_number
           FROM app.bank_statement_entries bse
           JOIN app.bank_accounts ba ON (ba.tenant_id,ba.id)=(bse.tenant_id,bse.bank_account_id)
           WHERE bse.tenant_id=$1 ORDER BY bse.occurred_at DESC,bse.id DESC`, [tenantId]);
+      const imports = await client.query(`SELECT bsi.id,bsi.bank_account_id,ba.code AS bank_account_code,
+          bsi.source_format,bsi.original_file_name,bsi.content_sha256,bsi.adapter_version,
+          bsi.imported_count,bsi.skipped_count,bsi.mapping,bsi.created_at
+          FROM app.bank_statement_imports bsi
+          JOIN app.bank_accounts ba ON (ba.tenant_id,ba.id)=(bsi.tenant_id,bsi.bank_account_id)
+          WHERE bsi.tenant_id=$1 ORDER BY bsi.created_at DESC,bsi.id DESC`, [tenantId]);
       const realized = await this.realizedMargin(client, tenantId);
       const commissionPolicies = await client.query(`SELECT id,code,name,version,status,basis,rate_pct::text,
           commodity,beneficiary_name,effective_from::text,effective_to::text,created_at
@@ -60,6 +66,7 @@ export class FinanceGovernanceService {
         paymentBatches: batches.rows,
         bankAccounts: accounts.rows,
         bankStatementEntries: entries.rows,
+        bankStatementImports: imports.rows,
         realizedMargin: realized,
         commissionPolicies: commissionPolicies.rows,
         commissionAccruals: commissionAccruals.rows,
@@ -347,6 +354,62 @@ export class FinanceGovernanceService {
         input.direction, new Decimal(input.amount).toFixed(2), input.bankReference, input.description, actorId]);
       await this.record(client, tenantId, actorId, 'finance.bank_statement_imported', 'bank_statement_entry', id, input);
       return { id, ...input, status: 'UNMATCHED' };
+    });
+  }
+
+  importBankStatement(tenantId: string, actorId: string, input: ImportBankStatementInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'FINANCE_EDIT');
+      if (!['TIER_TRADE_CSV', 'NORMALIZED_JSON'].includes(input.sourceFormat)) {
+        throw new UnprocessableEntityException({ code: 'BANK_STATEMENT_ADAPTER_NOT_AVAILABLE', sourceFormat: input.sourceFormat });
+      }
+      const account = await client.query('SELECT 1 FROM app.bank_accounts WHERE tenant_id=$1 AND id=$2 AND active=true FOR UPDATE', [tenantId, input.bankAccountId]);
+      if (!account.rows[0]) throw new NotFoundException({ code: 'ACTIVE_BANK_ACCOUNT_NOT_FOUND' });
+      const normalized = input.entries.map((entry) => ({
+        ...entry,
+        amount: new Decimal(entry.amount).toFixed(2),
+        bankReference: entry.bankReference.trim(),
+        description: entry.description?.trim() ?? null,
+      }));
+      const contentSha256 = createHash('sha256').update(JSON.stringify({
+        sourceFormat: input.sourceFormat, entries: normalized,
+      })).digest('hex');
+      const existing = await client.query<{ id: string; imported_count: number; skipped_count: number }>(
+        `SELECT id,imported_count,skipped_count FROM app.bank_statement_imports
+          WHERE tenant_id=$1 AND bank_account_id=$2 AND content_sha256=$3`,
+        [tenantId, input.bankAccountId, contentSha256]);
+      if (existing.rows[0]) return { id: existing.rows[0].id, contentSha256,
+        importedCount: existing.rows[0].imported_count, skippedCount: existing.rows[0].skipped_count,
+        alreadyImported: true };
+
+      const importId = randomUUID();
+      await client.query(`INSERT INTO app.bank_statement_imports
+        (tenant_id,id,bank_account_id,source_format,original_file_name,content_sha256,adapter_version,
+         imported_count,skipped_count,mapping,created_by)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,0,0,$8::jsonb,$9)`,
+      [tenantId, importId, input.bankAccountId, input.sourceFormat, input.originalFileName,
+        contentSha256, input.adapterVersion, JSON.stringify(input.mapping), actorId]);
+      let importedCount = 0;
+      for (const entry of normalized) {
+        const fingerprint = createHash('sha256').update([
+          input.bankAccountId, entry.occurredAt, entry.direction, entry.amount, entry.bankReference,
+        ].join('|')).digest('hex');
+        const inserted = await client.query(`INSERT INTO app.bank_statement_entries
+          (tenant_id,id,bank_account_id,occurred_at,direction,amount,bank_reference,description,created_by,
+           import_id,source_line_number,fingerprint)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+          ON CONFLICT DO NOTHING RETURNING id`,
+        [tenantId, randomUUID(), input.bankAccountId, entry.occurredAt, entry.direction, entry.amount,
+          entry.bankReference, entry.description, actorId, importId, entry.sourceLineNumber, fingerprint]);
+        importedCount += inserted.rowCount ?? 0;
+      }
+      const skippedCount = normalized.length - importedCount;
+      await client.query(`UPDATE app.bank_statement_imports SET imported_count=$3,skipped_count=$4
+        WHERE tenant_id=$1 AND id=$2`, [tenantId, importId, importedCount, skippedCount]);
+      await this.record(client, tenantId, actorId, 'finance.bank_statement_batch_imported',
+        'bank_statement_import', importId, { sourceFormat: input.sourceFormat, originalFileName: input.originalFileName,
+          contentSha256, importedCount, skippedCount, adapterVersion: input.adapterVersion });
+      return { id: importId, contentSha256, importedCount, skippedCount, alreadyImported: false };
     });
   }
 

@@ -7,6 +7,7 @@ import {
   accrueCommissionSchema,
   createBankAccountSchema,
   createBankStatementEntrySchema,
+  importBankStatementSchema,
   createPaymentBatchSchema,
   createCommissionPolicySchema,
   createPurchaseCostComponentSchema,
@@ -19,6 +20,7 @@ import {
   type AccrueCommissionInput,
   type CreateBankAccountInput,
   type CreateBankStatementEntryInput,
+  type ImportBankStatementInput,
   type CreatePaymentBatchInput,
   type CreateCommissionPolicyInput,
   type CreatePurchaseCostComponentInput,
@@ -115,6 +117,12 @@ export class FinanceController {
   createBankStatementEntry(@Identity() identity: RequestIdentity,
     @Body(new SchemaPipe(createBankStatementEntrySchema)) input: CreateBankStatementEntryInput) {
     return this.governance.createBankStatementEntry(identity.tenantId, identity.actorId, input);
+  }
+
+  @Post('bank-statement-imports')
+  importBankStatement(@Identity() identity: RequestIdentity,
+    @Body(new SchemaPipe(importBankStatementSchema)) input: ImportBankStatementInput) {
+    return this.governance.importBankStatement(identity.tenantId, identity.actorId, input);
   }
 
   @Post('bank-statement-entries/:entryId/reconcile')
