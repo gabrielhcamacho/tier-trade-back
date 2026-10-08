@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { DatabasePlatformPort } from '../database/database.js';
+import { DashboardRefreshService } from '../dashboard/dashboard-refresh.service.js';
 import { OutboxObservability, type OutboxQueueSnapshot } from './outbox.observability.js';
 
 interface ClaimedEvent {
@@ -30,6 +31,7 @@ export class OutboxProcessor {
   constructor(
     @Inject(DatabasePlatformPort) private readonly db: DatabasePlatformPort,
     @Inject(OutboxObservability) private readonly observability: OutboxObservability,
+    @Inject(DashboardRefreshService) private readonly dashboardRefresh: DashboardRefreshService,
   ) {}
 
   async processTenant(
@@ -133,6 +135,8 @@ export class OutboxProcessor {
       if (event.event_type === 'contract.activated' || event.event_type.startsWith('contract.obligation.')) {
         await this.projectContractSummary(client, tenantId, event);
       }
+
+      await this.dashboardRefresh.enqueueForEvent(client, tenantId, event);
 
       const acknowledged = await client.query(
         `UPDATE app.outbox_events

@@ -66,8 +66,11 @@ describe('runtime environment', () => {
     })).toThrow(/SUPABASE_URL.*SUPABASE_SECRET_KEY/);
   });
 
-  it('requires a tenant for each worker process', () => {
-    expect(() => parseWorkerEnvironment(productionEnvironment)).toThrow();
+  it('supports a shared multi-tenant worker and a single-tenant compatibility mode', () => {
+    const shared = parseWorkerEnvironment(productionEnvironment);
+    expect(shared.TENANT_ID).toBeUndefined();
+    expect(shared.WORKER_TENANT_BATCH_SIZE).toBe(100);
+    expect(shared.DASHBOARD_REFRESH_BATCH_SIZE).toBe(8);
     expect(parseWorkerEnvironment({
       ...productionEnvironment,
       TENANT_ID: '11111111-1111-4111-8111-111111111111',

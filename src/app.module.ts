@@ -10,9 +10,10 @@ import { RiskModule } from './risk/risk.module.js';
 import { FiscalModule } from './fiscal/fiscal.module.js';
 import { OverviewModule } from './overview/overview.module.js';
 import { DocumentsModule } from './documents/documents.module.js';
+import { DashboardModule } from './dashboard/dashboard.module.js';
 
 @Module({
-  imports: [AccessModule, CommercialModule, DocumentsModule, FinanceModule, FiscalModule, HealthModule, InventoryModule,
-    OperationsModule, OutboxModule, RiskModule, OverviewModule],
+  imports: [AccessModule, CommercialModule, DashboardModule, DocumentsModule, FinanceModule, FiscalModule, HealthModule,
+    InventoryModule, OperationsModule, OutboxModule, RiskModule, OverviewModule],
 })
 export class AppModule {}

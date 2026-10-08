@@ -20,6 +20,9 @@ Configuração:
 | `OUTBOX_HEALTH_STALE_AFTER_MS` | `30000` | tempo máximo sem conclusão de lote antes de ficar indisponível |
 | `OUTBOX_POLL_INTERVAL_MS` | `1000` | espera quando não há eventos prontos |
 | `OUTBOX_BATCH_SIZE` | `25` | eventos reivindicados por lote, limitado a 100 |
+| `DASHBOARD_REFRESH_BATCH_SIZE` | `8` | snapshots reivindicados por tenant, limitado a 25 |
+| `WORKER_TENANT_BATCH_SIZE` | `100` | tenants ativos enumerados por página, limitado a 500 |
+| `TENANT_ID` | vazio | restringe opcionalmente o worker a um tenant para diagnóstico |
 
 ## Sinais
 
@@ -32,7 +35,7 @@ Configuração:
 - `tier_trade_outbox_last_batch_timestamp_seconds`: instante do último lote concluído;
 - `tier_trade_outbox_worker_ready`: estado atual do loop.
 
-O rótulo `tenant_id` é obrigatório para investigação e isolamento. Não adicionar `event_id`, `worker_id`, usuário ou contraparte como rótulos, pois gerariam cardinalidade não controlada. Identificadores de evento e worker ficam somente nos logs.
+As métricas por lote da outbox mantêm `tenant_id` para investigação. A sonda geral do worker usa `multi-tenant` quando não há restrição explícita. Não adicionar `event_id`, `worker_id`, usuário ou contraparte como rótulos, pois gerariam cardinalidade não controlada. Identificadores de evento e worker ficam somente nos logs.
 
 ## Logs estruturados
 

@@ -1,23 +1,18 @@
-import { Controller, Get, Inject, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Inject, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Identity, type RequestIdentity, RequestIdentityGuard } from '../auth/request-identity.guard.js';
-import { OverviewService } from './overview.service.js';
+import { DashboardQueryService } from '../dashboard/dashboard-query.service.js';
 
 @ApiTags('overview')
 @ApiBearerAuth()
 @UseGuards(RequestIdentityGuard)
 @Controller('v1/overview')
 export class OverviewController {
-  constructor(@Inject(OverviewService) private readonly service: OverviewService) {}
+  constructor(@Inject(DashboardQueryService) private readonly dashboards: DashboardQueryService) {}
 
   @Get()
-  overview(@Identity() identity: RequestIdentity, @Query('commodity') commodity?: string,
-    @Query('unit') unit?: string, @Query('crop') crop?: string, @Query('period') period?: string) {
-    return this.service.overview(identity.tenantId, identity.actorId, {
-      ...(commodity ? { commodity } : {}),
-      ...(unit ? { unit } : {}),
-      ...(crop ? { crop } : {}),
-      ...(period ? { period } : {}),
-    });
+  async overview(@Identity() identity: RequestIdentity) {
+    const result = await this.dashboards.one(identity.tenantId, identity.actorId, 'central');
+    return result.body;
   }
 }

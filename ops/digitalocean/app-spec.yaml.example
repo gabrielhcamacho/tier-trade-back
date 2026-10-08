@@ -66,10 +66,6 @@ services:
         scope: RUN_TIME
         type: GENERAL
         value: --max-old-space-size=160
-      - key: TENANT_ID
-        scope: RUN_TIME
-        type: GENERAL
-        value: e16ae5f4-5d64-4a84-a52f-32b569a212c0
       - key: DATABASE_POOL_MAX
         scope: RUN_TIME
         type: GENERAL
@@ -94,6 +90,14 @@ services:
         scope: RUN_TIME
         type: GENERAL
         value: "25"
+      - key: DASHBOARD_REFRESH_BATCH_SIZE
+        scope: RUN_TIME
+        type: GENERAL
+        value: "8"
+      - key: WORKER_TENANT_BATCH_SIZE
+        scope: RUN_TIME
+        type: GENERAL
+        value: "100"
       - key: OUTBOX_OBSERVABILITY_PORT
         scope: RUN_TIME
         type: GENERAL

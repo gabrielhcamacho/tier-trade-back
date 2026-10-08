@@ -16,9 +16,11 @@ const baseSchema = z.object({
 });
 
 const workerSchema = baseSchema.extend({
-  TENANT_ID: z.uuid(),
+  TENANT_ID: z.uuid().optional(),
   OUTBOX_POLL_INTERVAL_MS: z.coerce.number().int().min(100).max(60_000).default(1_000),
   OUTBOX_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(25),
+  DASHBOARD_REFRESH_BATCH_SIZE: z.coerce.number().int().min(1).max(25).default(8),
+  WORKER_TENANT_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(100),
   OUTBOX_OBSERVABILITY_PORT: z.coerce.number().int().min(1).max(65_535).default(9464),
   OUTBOX_HEALTH_STALE_AFTER_MS: z.coerce.number().int().min(1_000).max(600_000).default(30_000),
 });

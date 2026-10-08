@@ -11,4 +11,4 @@
 - `access.scope: TENANT` registra a abrangência atual. Os papéis de direção/equipe e o escopo por unidade não estão modelados; as capabilities atuais são de ação, não de visualização. A criação de visões restritas requer decisão e implementação próprias antes de ser afirmada.
 - `unavailable` lista a ponte de margem realizada, projeção de caixa, insights de IA e escopo por papel/unidade. Não devem ser substituídos por dados ilustrativos em contas reais.
 
-As coleções em `sources` preservam temporariamente os contratos existentes dos módulos para migração da Central sem multiplicar chamadas HTTP. Uma versão futura pode remover esse envelope após separar os endpoints de drill-down e adotar um snapshot com consistência definida.
+As coleções em `sources` preservam temporariamente os contratos existentes dos módulos para migração da Central sem multiplicar chamadas HTTP. A versão 2 removerá esse envelope, separará os endpoints de drill-down e passará a ler snapshots incrementais conforme o ADR 0019.

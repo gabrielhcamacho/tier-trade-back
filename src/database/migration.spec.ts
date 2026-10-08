@@ -1,6 +1,12 @@
 import { PGlite } from '@electric-sql/pglite';
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
+import type { PoolClient } from 'pg';
+import type { DatabasePlatformPort } from './database.js';
+import { DASHBOARD_MODULES } from '../dashboard/dashboard.constants.js';
+import { DashboardProcessor } from '../dashboard/dashboard.processor.js';
+import { DashboardRefreshService } from '../dashboard/dashboard-refresh.service.js';
+import { DashboardSnapshotBuilder } from '../dashboard/dashboard-snapshot.builder.js';
 
 describe('commercial foundation migration', () => {
   it('applies and isolates rows through the transaction tenant context', async () => {
@@ -46,6 +52,16 @@ describe('commercial foundation migration', () => {
       '20261005161634_demo_reset_operational_completeness.sql',
       '20261005213800_contract_obligation_workflow.sql',
       '20261007205930_purchase_contract_terms.sql',
+      '20261007213335_contract_obligation_evidence.sql',
+      '20261007214032_commercial_demands_negotiations.sql',
+      '20261007214736_cover_commercial_actor_foreign_keys_and_terms_rls.sql',
+      '20261007222434_contract_lifecycle_and_version_references.sql',
+      '20261007224325_cover_document_contract_version_foreign_keys.sql',
+      '20261008011332_bank_statement_import_batches.sql',
+      '20261008032009_dashboard_read_model_foundation.sql',
+      '20261008032742_optimize_dashboard_rls_initplan.sql',
+      '20261008032945_optimize_dashboard_rls_function_initplan.sql',
+      '20261008034318_index_active_dashboard_tenants.sql',
     ]) {
       const migration = await readFile(new URL(`../../supabase/migrations/${migrationName}`, import.meta.url), 'utf8');
       await db.exec(migration);
@@ -67,6 +83,13 @@ describe('commercial foundation migration', () => {
       INSERT INTO app.bank_accounts (tenant_id,id,code,name,created_by) VALUES
         ('11111111-1111-4111-8111-111111111111','eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee','A001','Conta tenant A','22222222-2222-4222-8222-222222222222'),
         ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','ffffffff-ffff-4fff-8fff-ffffffffffff','B001','Conta tenant B','dddddddd-dddd-4ddd-8ddd-dddddddddddd');
+      INSERT INTO app.dashboard_snapshots
+        (tenant_id,module,scope_key,contract_version,snapshot_version,payload) VALUES
+        ('11111111-1111-4111-8111-111111111111','central','default',1,1,'{"tenant":"A"}'),
+        ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','central','default',1,1,'{"tenant":"B"}');
+      INSERT INTO app.dashboard_refresh_queue (tenant_id,module,scope_key) VALUES
+        ('11111111-1111-4111-8111-111111111111','central','default'),
+        ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','central','default');
       CREATE ROLE app_runtime NOLOGIN NOSUPERUSER NOBYPASSRLS;
       GRANT USAGE ON SCHEMA app TO app_runtime;
       GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA app TO app_runtime;
@@ -135,11 +158,45 @@ describe('commercial foundation migration', () => {
       'SELECT count(*)::int AS count FROM app.purchase_contract_terms',
     );
     expect(visiblePurchaseTerms.rows).toEqual([{ count: 0 }]);
+    const visibleDashboardSnapshots = await db.query<{ count: number }>(
+      'SELECT count(*)::int AS count FROM app.dashboard_snapshots',
+    );
+    expect(visibleDashboardSnapshots.rows).toEqual([{ count: 1 }]);
+    const visibleDashboardRefreshes = await db.query<{ count: number }>(
+      'SELECT count(*)::int AS count FROM app.dashboard_refresh_queue',
+    );
+    expect(visibleDashboardRefreshes.rows).toEqual([{ count: 1 }]);
+    const builder = new DashboardSnapshotBuilder();
+    for (const module of DASHBOARD_MODULES) {
+      const payload = await builder.build(db as unknown as PoolClient,
+        '11111111-1111-4111-8111-111111111111', module);
+      expect(payload).toMatchObject({ contractVersion: 1, module });
+    }
+    const database = {
+      transaction: async <T>(_tenantId: string, operation: (client: PoolClient) => Promise<T>) =>
+        operation(db as unknown as PoolClient),
+      controlPlaneTransaction: async <T>(operation: (client: PoolClient) => Promise<T>) =>
+        operation(db as unknown as PoolClient),
+    } as unknown as DatabasePlatformPort;
+    const refresh = new DashboardRefreshService(database);
+    expect(await refresh.ensureMissingSnapshots('11111111-1111-4111-8111-111111111111')).toBe(7);
+    const batch = await new DashboardProcessor(database, builder)
+      .processTenant('11111111-1111-4111-8111-111111111111', '55555555-5555-4555-8555-555555555555', 8);
+    expect(batch).toMatchObject({ claimed: 8, built: 8, failed: 0, pending: 0 });
+    const builtSnapshots = await db.query<{ count: number }>(
+      'SELECT count(*)::int AS count FROM app.dashboard_snapshots',
+    );
+    expect(builtSnapshots.rows).toEqual([{ count: 8 }]);
     await db.exec('RESET ROLE');
     const runtimePrivileges = await db.query<{ can_update: boolean }>(
       "SELECT has_table_privilege('tier_trade_runtime','app.financial_events','UPDATE') AS can_update",
     );
     expect(runtimePrivileges.rows).toEqual([{ can_update: true }]);
+    const dashboardPrivileges = await db.query<{ can_read: boolean; can_write: boolean }>(
+      `SELECT has_table_privilege('tier_trade_runtime','app.dashboard_snapshots','SELECT') AS can_read,
+              has_table_privilege('tier_trade_runtime','app.dashboard_refresh_queue','UPDATE') AS can_write`,
+    );
+    expect(dashboardPrivileges.rows).toEqual([{ can_read: true, can_write: true }]);
     await db.close();
-  });
+  }, 15_000);
 });

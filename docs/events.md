@@ -51,11 +51,14 @@ Todos carregam `id`, `tenant_id`, tipo, agregado, payload mínimo e instante. A 
 
 ## Processamento interno
 
-- o worker recebe um `TENANT_ID` e nunca contorna a RLS;
+- o worker compartilhado descobre tenants ativos em páginas; `TENANT_ID` é apenas um modo opcional de diagnóstico;
+- cada lote continua abrindo uma transação tenant-scoped e nunca contorna a RLS;
 - eventos são reclamados com lease recuperável e `FOR UPDATE SKIP LOCKED`;
 - falhas usam backoff exponencial limitado a cinco minutos;
 - `commercial_activity_read_model` registra a linha do tempo de todos os eventos;
 - `contract_summary_read_model` é criada idempotentemente por `contract.activated`;
+- cada evento invalida a Central e somente os módulos dependentes; a fila de dashboards deduplica eventos próximos;
+- snapshots são reconstruídos fora da requisição HTTP e publicados com versão monotônica e watermark do evento;
 - o módulo de estoque registra, na mesma transação do recebimento, entrada, correção ou estorno compensatório; o saldo é sempre a soma do livro de movimentos;
 - alocações alteram somente disponibilidade; expedições criam movimento `DISPATCH` negativo e atualizam o saldo executado da venda na mesma transação;
 - a mesma transação da expedição cria o evento financeiro canônico; título e baixa continuam fatos posteriores e separados;

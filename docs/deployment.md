@@ -52,11 +52,11 @@ Ambos os processos exigem:
 e worker usam no máximo três conexões cada, evitando consumir de forma
 desnecessária o limite do pooler do Supabase.
 
-O worker também exige `TENANT_ID` e aceita os limites `OUTBOX_*` documentados em
-`docs/outbox-observability.md`. Nesta versão, cada worker atende exatamente um
-tenant. O piloto usa o tenant de demonstração. Antes de liberar onboarding em
-produção, deve existir um supervisor que descubra tenants e distribua partições,
-ou um processo worker independente por tenant.
+O worker é multi-tenant por padrão e aceita os limites `OUTBOX_*`,
+`DASHBOARD_REFRESH_BATCH_SIZE` e `WORKER_TENANT_BATCH_SIZE` documentados em
+`docs/outbox-observability.md`. Ele descobre memberships ativas em páginas e
+abre toda leitura ou escrita de domínio com contexto explícito de tenant.
+`TENANT_ID` é opcional e restringe uma execução para diagnóstico ou reparo.
 
 ## Migrações
 
