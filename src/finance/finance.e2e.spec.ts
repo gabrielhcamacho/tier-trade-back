@@ -60,6 +60,7 @@ describe.runIf(Boolean(databaseUrl))('financial receivables', () => {
       '20261007214736_cover_commercial_actor_foreign_keys_and_terms_rls.sql',
       '20261007222434_contract_lifecycle_and_version_references.sql',
       '20261008011332_bank_statement_import_batches.sql',
+      '20261008033921_document_archive_pagination.sql',
     ];
     for (const migration of migrations) {
       await setup.query(await readFile(new URL(`../../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
@@ -358,6 +359,41 @@ describe.runIf(Boolean(databaseUrl))('financial receivables', () => {
         signatures: [expect.objectContaining({ signerName: 'Diretoria JD', status: 'SIGNED' })],
       }),
     ]);
+
+    const archivePool = new Pool({ connectionString: databaseUrl });
+    await archivePool.query(
+      `INSERT INTO app.documents
+        (tenant_id,id,aggregate_type,aggregate_id,document_type,file_name,mime_type,size_bytes,
+         storage_path,status,version,uploaded_at,created_by,created_at,contract_version_number)
+       SELECT $1,('e9000000-0000-4000-8000-' || lpad(n::text,12,'0'))::uuid,
+         'CONTRACT',$2,'OTHER','arquivo-' || n || '.pdf','application/pdf',128,
+         'test/archive-' || n,'AVAILABLE',1,now(),$3,
+         '2026-10-08 10:00:00+00'::timestamptz + n * interval '1 second',1
+       FROM generate_series(2,28) AS n`,
+      [tenantId, 'd5000000-0000-4000-8000-000000000001', actorId],
+    );
+    await archivePool.end();
+
+    const firstPage = await server.inject({ method: 'GET', url: '/v1/documents/archive?page=1&criterion=arquivo-', headers });
+    const secondPage = await server.inject({ method: 'GET', url: '/v1/documents/archive?page=2&criterion=arquivo-', headers });
+    expect(firstPage.statusCode, firstPage.body).toBe(200);
+    expect(secondPage.statusCode, secondPage.body).toBe(200);
+    expect(firstPage.json()).toMatchObject({ total: 27, page: 1, pageSize: 25, totalPages: 2 });
+    expect(firstPage.json().items).toHaveLength(25);
+    expect(secondPage.json().items).toHaveLength(2);
+    expect(new Set([...firstPage.json().items, ...secondPage.json().items].map((item: { id: string }) => item.id)).size).toBe(27);
+    expect(firstPage.json().items[0].file_name).toBe('arquivo-28.pdf');
+
+    const filtered = await server.inject({ method: 'GET',
+      url: '/v1/documents/archive?page=1&documentType=OTHER&criterion=arquivo-28&from=2026-10-08&to=2026-10-08', headers });
+    expect(filtered.statusCode, filtered.body).toBe(200);
+    expect(filtered.json().items.map((item: { file_name: string }) => item.file_name)).toEqual(['arquivo-28.pdf']);
+    expect(filtered.json().total).toBe(1);
+    const invalidPage = await server.inject({ method: 'GET', url: '/v1/documents/archive?page=0', headers });
+    expect(invalidPage.statusCode).toBe(400);
+    const invalidRange = await server.inject({ method: 'GET',
+      url: '/v1/documents/archive?from=2026-10-09&to=2026-10-08', headers });
+    expect(invalidRange.statusCode).toBe(400);
 
     const eventPool = new Pool({ connectionString: databaseUrl });
     const events = await eventPool.query(

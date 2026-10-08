@@ -2,8 +2,8 @@ import { Body, Controller, Get, Inject, Param, ParseUUIDPipe, Post, Query, UseGu
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Identity, type RequestIdentity, RequestIdentityGuard } from '../auth/request-identity.guard.js';
 import { SchemaPipe } from '../common/schema.pipe.js';
-import { createUploadRequestSchema, signatureSchema,
-  type CreateUploadRequestInput, type SignatureInput } from './documents.schemas.js';
+import { createUploadRequestSchema, documentArchiveQuerySchema, signatureSchema,
+  type CreateUploadRequestInput, type DocumentArchiveQuery, type SignatureInput } from './documents.schemas.js';
 import { DocumentsService } from './documents.service.js';
 
 @ApiTags('documents')
@@ -17,6 +17,12 @@ export class DocumentsController {
   list(@Identity() identity: RequestIdentity,
     @Query('aggregateType') aggregateType?: string, @Query('aggregateId') aggregateId?: string) {
     return this.service.list(identity.tenantId, identity.actorId, aggregateType, aggregateId);
+  }
+
+  @Get('archive')
+  archive(@Identity() identity: RequestIdentity,
+    @Query(new SchemaPipe(documentArchiveQuerySchema)) query: DocumentArchiveQuery) {
+    return this.service.listArchive(identity.tenantId, identity.actorId, query);
   }
 
   @Post('upload-request')

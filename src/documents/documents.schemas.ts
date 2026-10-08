@@ -34,5 +34,18 @@ export const signatureSchema = z.object({
   }
 });
 
+export const documentArchiveQuerySchema = z.object({
+  aggregateType: createUploadRequestSchema.shape.aggregateType.optional(),
+  documentType: createUploadRequestSchema.shape.documentType.optional(),
+  status: z.enum(['PENDING_UPLOAD', 'AVAILABLE', 'ARCHIVED']).optional(),
+  from: z.iso.date().optional(),
+  to: z.iso.date().optional(),
+  criterion: z.string().trim().max(120).optional(),
+  page: z.coerce.number<number>().int().min(1).max(100_000).default(1),
+}).strict().refine((value) => !value.from || !value.to || value.from <= value.to, {
+  path: ['to'], message: 'The end date must be on or after the start date.',
+});
+
 export type CreateUploadRequestInput = z.infer<typeof createUploadRequestSchema>;
 export type SignatureInput = z.infer<typeof signatureSchema>;
+export type DocumentArchiveQuery = z.infer<typeof documentArchiveQuerySchema>;

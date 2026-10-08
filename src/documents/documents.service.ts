@@ -3,9 +3,10 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { DatabasePlatformPort } from '../database/database.js';
-import type { CreateUploadRequestInput, SignatureInput } from './documents.schemas.js';
+import type { CreateUploadRequestInput, DocumentArchiveQuery, SignatureInput } from './documents.schemas.js';
 
 const bucket = 'tier-trade-documents';
+const archivePageSize = 25;
 const aggregateTables: Record<CreateUploadRequestInput['aggregateType'], string> = {
   CONTRACT: 'contracts', SALES_CONTRACT: 'sales_contracts', LOAD: 'loads',
   FISCAL_DOCUMENT: 'fiscal_documents', COUNTERPARTY: 'counterparties', INVENTORY_LOT: 'inventory_lots',
@@ -49,6 +50,36 @@ export class DocumentsService {
                    d.contract_version_number,d.sales_contract_version_number
           ORDER BY d.created_at DESC,d.id DESC`, [tenantId, aggregateType ?? null, aggregateId ?? null]);
       return { items: result.rows };
+    });
+  }
+
+  listArchive(tenantId: string, actorId: string, query: DocumentArchiveQuery) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertMember(client, tenantId, actorId);
+      const filters = [tenantId, query.aggregateType ?? null, query.documentType ?? null,
+        query.status ?? null, query.from ?? null, query.to ?? null, query.criterion || null];
+      const where = `d.tenant_id=$1
+        AND ($2::text IS NULL OR d.aggregate_type=$2)
+        AND ($3::text IS NULL OR d.document_type=$3)
+        AND ($4::text IS NULL OR d.status=$4)
+        AND ($5::date IS NULL OR d.created_at >= ($5::date AT TIME ZONE 'America/Sao_Paulo'))
+        AND ($6::date IS NULL OR d.created_at < (($6::date + 1) AT TIME ZONE 'America/Sao_Paulo'))
+        AND ($7::text IS NULL OR strpos(lower(d.file_name),lower($7)) > 0
+          OR strpos(lower(coalesce(d.notes,'')),lower($7)) > 0
+          OR strpos(d.aggregate_id::text,$7) > 0 OR strpos(d.id::text,$7) > 0)`;
+      const count = await client.query<{ total: string }>(
+        `SELECT count(*)::text AS total FROM app.documents d WHERE ${where}`, filters);
+      const total = Number(count.rows[0]!.total);
+      const result = await client.query(
+        `SELECT d.id,d.aggregate_type,d.aggregate_id,d.document_type,d.file_name,d.mime_type,
+                d.size_bytes::text,d.status,d.version,d.notes,d.uploaded_at,d.created_at,
+                d.contract_version_number,d.sales_contract_version_number,
+                '[]'::jsonb AS signatures
+           FROM app.documents d WHERE ${where}
+          ORDER BY d.created_at DESC,d.id DESC LIMIT $8 OFFSET $9`,
+        [...filters, archivePageSize, (query.page - 1) * archivePageSize]);
+      return { items: result.rows, total, page: query.page, pageSize: archivePageSize,
+        totalPages: Math.max(1, Math.ceil(total / archivePageSize)) };
     });
   }
 

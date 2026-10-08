@@ -126,3 +126,14 @@ Validação: tipagem, verificação de ações de servidor e build de produção
 Validação: tipagem, ações de servidor e build de produção aprovados. Frontend `88b9b77` publicado no GitHub e deploy de produção `READY` na Vercel. Conferência autenticada no detalhe do contrato mostrou os três rótulos e controles na mesma altura, seletor nativo invisível e valores calculados em Geist Sans. A interação de upload/download não foi repetida nesta entrega; o fluxo funcional de arquivo de ensaio segue na próxima sequência, sem criar nem alterar documentos de produção neste ajuste.
 
 Próxima sequência sem depender de regra da JD: validar de ponta a ponta a seleção, o envio, a listagem e o download de um arquivo de ensaio apropriado; automatizar os vínculos dos anexos entre relatórios e objetos de origem; paginar a consulta transversal de documentos. Permanecem para aceite humano os cenários JD-01 a JD-04 e as decisões D02 a D04 e D10.
+
+## Paginação do arquivo transversal em 08/10/2026
+
+| Atividade | Estado | Evidência ou limite |
+| --- | --- | --- |
+| Consulta paginada por tenant | Implementada e testada localmente | Endpoint autenticado separado de `/v1/documents`, com 25 documentos por página, total exato, ordenação estável por data e ID e os filtros de origem, tipo, situação, período e critério aplicados no PostgreSQL. A consulta já usada nos detalhes de contrato e carga não foi alterada. Suíte completa: 43 testes aprovados no Colima. |
+| Tela geral de documentos | Implementada e validada por build | Total e página atual visíveis; navegação anterior/próxima preserva os filtros. Busca não carrega todo o arquivo no navegador. |
+| Índice de consulta | Migration criada e testada no Colima; pendente em produção | Índice `(tenant_id, created_at DESC, id DESC)` para a listagem geral. A credencial vinculada ao Supabase CLI recebeu 403 e a credencial de runtime não tem privilégio de DDL; não foi executada mudança direta no banco de produção. O endpoint funciona sem o índice, mas ele deve ser aplicado para volumes maiores. |
+| Upload e download reais | Pendente para teste conjunto | Esta entrega só altera consulta de metadados e navegação. Não substitui a prova autenticada de seleção, envio, listagem e download de um arquivo de ensaio. |
+
+Próxima sequência proposta sem depender de novas regras da JD: automatizar a cobertura dos vínculos de anexos a contratos, cargas e relatórios; melhorar a tela de documentos com busca por origem e acesso direto ao registro relacionado; retomar telas operacionais já previstas no plano, priorizando lacunas reais verificadas no código antes de abrir novos módulos. O envio de arquivo de ponta a ponta será testado com o usuário na sequência combinada. Decisões D02 a D04, D07, D08 e D10 continuam fora deste pacote.
