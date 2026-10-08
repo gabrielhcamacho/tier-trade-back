@@ -22,7 +22,7 @@ Atualizado em 07/10/2026. Este documento é atualizado junto com cada entrega pa
 | Rastreabilidade consolidada | Implementada e validada | Encadeia oferta, compra, carga, documento, estoque, venda e financeiro sem criar dados fictícios; tipagem e build aprovados. |
 | Estados vazios e usabilidade da demonstração | Implementado e validado | Ausência de dados explica a próxima ação possível nas telas operacionais, fiscais, financeiras e de estoque alcançadas. |
 | Automação oficial de venda, expedição e liquidação | Implementada e executada | `test:pilot:sales-settlement` aprovado no PostgreSQL descartável do Colima no HD externo. |
-| Validação e publicação | Em execução | Tipagem, build da API, build do frontend, ações de servidor e jornada integrada aprovados; publicação pendente. |
+| Validação e publicação | Concluída | Tipagem, builds, ações de servidor e jornada integrada aprovados; frontend `625c65f` publicado e saudável, backend `a0443bf` versionado sem alteração de runtime. |
 
 ## Validação do pacote em 07/10/2026
 
@@ -31,6 +31,7 @@ Atualizado em 07/10/2026. Este documento é atualizado junto com cada entrega pa
 - jornada integrada: uma prova executada e aprovada, com cinco cenários não selecionados corretamente ignorados pelo filtro do comando;
 - banco de teste: `tier_trade_test` no Colima armazenado no HD externo, sem acesso ao Supabase de produção;
 - revisão React: consultas independentes paralelizadas, páginas mantidas como componentes de servidor e nenhuma nova dependência enviada ao navegador.
+- produção: deploy do frontend ficou `READY`; `/rastreabilidade` respondeu HTTP 200 e a API respondeu `ready` com banco `ok`.
 
 ## Decisões externas que continuam pendentes
 
