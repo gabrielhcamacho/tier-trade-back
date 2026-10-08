@@ -80,4 +80,6 @@ Atualizado em 08/10/2026. Este documento é atualizado junto com cada entrega pa
 | Arquivos de documentos | Parcial, sem simulação | Referências de NF-e, tickets e documentos aparecem nos registros; o acesso ao arquivo depende de anexo efetivamente vinculado à operação de origem. Não há link fictício para PDF inexistente. |
 | Homologação autenticada em produção | Pendente | Abrir relatórios com a conta de demonstração e confirmar filtros, detalhe, vínculos e exportação em navegador após o deploy. |
 
+Publicação técnica: frontend `a037983` no GitHub e deploy `READY` na Vercel; a rota nova respondeu HTTP 200 com redirecionamento correto para login quando acessada sem autenticação. Plano versionado no repositório do backend. Essa checagem não substitui o teste autenticado do conteúdo.
+
 Próxima sequência técnica sem depender da JD: executar a homologação autenticada desses relatórios, corrigir eventuais vínculos sem tela de detalhe e completar a navegação até anexos realmente armazenados. Em paralelo, permanece pendente o aceite humano JD-01 a JD-04 e a parametrização D02 a D04; nenhuma regra financeira, fiscal ou de qualidade foi inferida nesta entrega.
