@@ -16,7 +16,7 @@ Validar ponta a ponta o primeiro piloto da JD para compras e vendas de soja e mi
 - contrato de venda, reserva de estoque, expedição, NF-e de saída, título a receber, recebimento e estorno;
 - margem realizada por commodity usando receita expedida, custo de aquisição e componentes persistidos;
 - política financeira versionada, lote de pagamento, alçada e segregação de função;
-- importação de extrato e conciliação exata de crédito/recebimento ou débito/pagamento;
+- registro manual auditado de lançamento de extrato e conciliação exata de crédito/recebimento ou débito/pagamento;
 - isolamento por tenant, RLS, auditoria e eventos de saída.
 - titularidade, risco, custódia, remaneios, perdas e inventários físicos em livro auditável;
 - comissão por política versionada e valor-base financeiro persistido, sem arredondamento silencioso;
@@ -31,6 +31,12 @@ Validar ponta a ponta o primeiro piloto da JD para compras e vendas de soja e mi
 
 Os valores usados nessas provas são dados demonstrativos explícitos. A execução comprova encadeamento, persistência, rastreabilidade e isolamento; não homologa regras comerciais, fiscais ou de qualidade da JD.
 
+### Comando oficial da jornada de preço fixo
+
+`pnpm test:pilot:fixed-price` executa a suíte comercial que contém a prova automatizada do primeiro encadeamento do piloto e suas pré-condições. O cenário cria a contraparte, configura política versionada, registra e recalcula a oferta, exige e aprova a exceção de margem, converte a oferta em contrato, preserva versões e obrigações, formaliza o ciclo contratual, agenda a carga, valida pesos e janela, registra o recebimento, movimenta o estoque, atualiza as projeções e processa os eventos assíncronos. O teste também cobre rejeições por piso, saldo, janela, estado inválido e tentativa de acesso por outro tenant.
+
+O comando exige `TEST_DATABASE_URL` apontando exclusivamente para o banco descartável `tier_trade_test`. Ele nunca deve apontar para o Supabase de produção.
+
 ## Estado publicado em 05/10/2026
 
 - frontend e backend de produção responderam com saúde normal;
@@ -42,6 +48,24 @@ Os valores usados nessas provas são dados demonstrativos explícitos. A execuç
 - a verificação desta data foi somente de leitura para não inserir arquivo, política ou apropriação artificial na conta de demonstração.
 
 O próximo aceite técnico controlado deve usar um documento e valores deliberadamente escolhidos para o piloto, confirmar a persistência e depois decidir se esses registros permanecem como dados demonstrativos.
+
+## Auditoria da conta demo em 07/10/2026
+
+- `demo@tiertrade.com.br` possui membership ativa no tenant `Cerrado Trading — Demonstração`, marcado como demonstração e provisionado com a versão 8 do seed;
+- a conta possui nove capacidades e pode criar ou editar os fluxos liberados para a demonstração;
+- o tenant contém cinco contrapartes, quatro ofertas com quatro cenários de preço, três aprovações, dois contratos versionados, três cargas e três recebimentos;
+- também existem dois lotes de estoque, dois títulos financeiros, dois documentos fiscais e 164 eventos de auditoria;
+- não foram encontrados oferta sem cenário, contrato sem versão, carga sem contrato, recebimento sem carga, movimento sem lote nem evento de auditoria sem membership correspondente;
+- todos os 164 eventos de saída estavam publicados no momento da consulta;
+- os relatórios de carteira e o histórico de versões do contrato passam a ser exportáveis em CSV pelo frontend, sempre consultando o backend com a identidade autenticada.
+
+## Auditoria de escopo em 07/10/2026
+
+- liquidação de venda, contas a pagar/receber, pagamentos, recebimentos, estornos, lotes, alçada, comissão, conciliação exata e margem realizada já estão implementados; não são desenvolvimento pendente;
+- o extrato hoje entra por formulário auditado. Importação automática por OFX/CNAB só será implementada se o formato real fizer parte de D06/D09;
+- pátio, ocorrências, romaneio, remaneios, perdas, inventário e reconciliação física já integram a base técnica;
+- o que falta para homologar não é reconstruir esses motores: são as regras oficiais D02–D09, os quatro cenários reais abaixo e o aceite dos diretores;
+- comissionamento agora possui entrada própria pela navegação de Contratos e do Financeiro, usando o mesmo backend e a mesma política versionada.
 
 ## Evolução de obrigações contratuais — publicada em 05/10/2026
 

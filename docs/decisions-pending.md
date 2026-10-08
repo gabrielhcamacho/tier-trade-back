@@ -13,17 +13,17 @@ O primeiro piloto foi confirmado para a JD, com soja e milho e preço fixo. A es
 - **D03 — Qualidade:** `Exemplos.xlsx` já definiu os fatos operacionais (pesos, tolerância registrada, umidade, impurezas, avariados, quebrados, queimados e ardidos). Ainda faltam homologar por commodity os limites, tolerâncias, contraprova e bases de desconto; esses valores permanecem configuráveis e não são inferidos das linhas históricas.
 - **D04 — Frete:** responsável, rateio, documentos e gatilho da despesa, antes das slices 4 e 7.
 - **D05 — Fiscal MT:** estabelecimentos, regimes, operação, UPF, FETHAB, IAGRO, SENAR, fundos, bases, vigência e arredondamento, antes das slices 5 e 8.
-- **D06 — Tesouraria:** banco, extrato, aprovadores e conciliação, antes da slice 7.
+- **D06 — Tesouraria:** o motor de alçadas, lotes, contas, lançamentos e conciliação exata já está implementado. Faltam somente banco/formato real, aprovadores nominais e decidir se haverá importação de OFX/CNAB no piloto; não reconstruir a conciliação.
 - **D07 — Contábil:** plano, eventos, apropriações, integração ou execução nativa e fechamento, antes da slice 9.
 - **D08 — Risco:** fonte, praça, instrumentos, frequência, base/câmbio e executor, antes da slice 10.
 - **D09 — Migração:** fontes, responsáveis, volumes, mapeamentos, corte e tolerâncias, antes da slice 11.
 
 `Exemplos.xlsx` fornece cenários e perguntas; taxas e tratamentos nela vistos não estão homologados para uso oficial.
 
-## Antes de declarar produção pronta
+## Antes de abrir produção para operação não assistida
 
-- **D10 — Continuidade:** o projeto Supabase atual foi confirmado como produção. Ainda faltam definir/validar backup/PITR, RPO, RTO, retenção e executar um ensaio de restauração.
-- **D11 — Operação:** domínios, SMTP, redirects, aceite da região, IPs de saída, administradores e MFA.
+- **D10 — Continuidade:** resolvida para o piloto. O projeto Supabase atual é produção e o produto decidiu não incluir backup automático/PITR agora; backup manual será feito apenas quando solicitado. RPO/RTO e restauração automatizada voltam antes de elevar o compromisso de disponibilidade.
+- **D11 — Operação:** frontend Vercel, API DigitalOcean, redirects e health checks estão ativos. Faltam domínio final, SMTP transacional, administradores definitivos, MFA e runbook antes do acesso não assistido.
 
 Convite via API administrativa e ambiente compartilhado do piloto permanecem soluções atuais. Painel comercial do SaaS, preços, implantação e onboarding self-service são posteriores ao primeiro piloto assistido e estão em D12 no plano mestre.
 
@@ -36,3 +36,4 @@ Convite via API administrativa e ambiente compartilhado do piloto permanecem sol
 - O projeto Supabase atual do Tier Trade é o banco de produção e também hospeda o bucket privado de documentos; ambientes futuros não podem compartilhar dados com ele.
 - API e worker do MVP são implantados no DigitalOcean; frontend no Vercel. O worker combinado é a configuração inicial de menor porte, sujeita a validação de capacidade e isolamento.
 - Pagamentos fiscais, estornos, lotes sujeitos a alçada e conciliação bancária exata são persistidos; contabilização continua pendente de D07.
+- Comissão versionada, apropriação e margem realizada gerencial já são persistidas; não são substitutos de fechamento contábil e DRE.

@@ -16,6 +16,7 @@
     "demo:reset": "tsx scripts/reset-demo-tenant.ts",
     "worker:outbox": "tsx src/outbox/worker.ts",
     "test": "vitest run",
+    "test:pilot:fixed-price": "vitest run src/commercial/commercial.e2e.spec.ts",
     "test:watch": "vitest"
   },
   "dependencies": {
