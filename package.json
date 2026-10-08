@@ -17,6 +17,7 @@
     "worker:outbox": "tsx src/outbox/worker.ts",
     "test": "vitest run",
     "test:pilot:fixed-price": "vitest run src/commercial/commercial.e2e.spec.ts",
+    "test:pilot:sales-settlement": "vitest run src/fiscal/fiscal.e2e.spec.ts -t \"homologates the complete soybean purchase, adjustment, sale and partial receipt scenario\"",
     "test:watch": "vitest"
   },
   "dependencies": {

@@ -1,5 +1,7 @@
 # Homologação do piloto JD — soja e milho
 
+> Acompanhamento contínuo: consulte `docs/execution-plan.md`, atualizado junto com cada nova atividade.
+
 ## Objetivo
 
 Validar ponta a ponta o primeiro piloto da JD para compras e vendas de soja e milho, com preço fixo nesta entrega. Preço a fixar e fixações parciais permanecem registrados no plano posterior e não são condição de aceite deste primeiro piloto.
@@ -36,6 +38,12 @@ Os valores usados nessas provas são dados demonstrativos explícitos. A execuç
 `pnpm test:pilot:fixed-price` executa a suíte comercial que contém a prova automatizada do primeiro encadeamento do piloto e suas pré-condições. O cenário cria a contraparte, configura política versionada, registra e recalcula a oferta, exige e aprova a exceção de margem, converte a oferta em contrato, preserva versões e obrigações, formaliza o ciclo contratual, agenda a carga, valida pesos e janela, registra o recebimento, movimenta o estoque, atualiza as projeções e processa os eventos assíncronos. O teste também cobre rejeições por piso, saldo, janela, estado inválido e tentativa de acesso por outro tenant.
 
 O comando exige `TEST_DATABASE_URL` apontando exclusivamente para o banco descartável `tier_trade_test`. Ele nunca deve apontar para o Supabase de produção.
+
+### Comando oficial da venda até a liquidação
+
+`pnpm test:pilot:sales-settlement` executa uma única jornada integrada de soja: oferta, aprovação, compra, contrato assinado, carga, ocorrência, correção de peso e romaneio, NF-e de entrada, ajuste financeiro, lote, contrato de venda, alocação, expedição, título, NF-e de saída, recebimento parcial e conciliação bancária. O cenário usa apenas valores demonstrativos explícitos e não os promove a regras da JD.
+
+O comando também exige `TEST_DATABASE_URL` apontando para o PostgreSQL descartável `tier_trade_test` no Colima do HD externo.
 
 ## Estado publicado em 05/10/2026
 
