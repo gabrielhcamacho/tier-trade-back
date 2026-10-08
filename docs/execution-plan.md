@@ -115,3 +115,14 @@ Próxima sequência técnica sem depender da JD: testar upload e download real d
 | Voltar e feedback de navegação | Implementada e validada por build | Controle de voltar compartilhado redesenhado como botão de ícone discreto junto ao breadcrumb, inclusive no roteiro e nos relatórios. Aviso flutuante “Abrindo página…” removido; permanece somente a barra superior sutil de progresso. |
 
 Validação: tipagem, verificação de ações de servidor e build de produção aprovados. Frontend `7395dfa` publicado no GitHub e deploy de produção `READY` na Vercel. Com a conta demo, Custos e margem abriu o detalhe sem fragmento e com rolagem inicial em zero; Entregas > Cooperativa Vale do Cerrado manteve o submenu de Contratos e o botão retornou a Entregas. O aviso flutuante não aparece mais; só a barra de progresso foi observada. Sem alteração de banco, backend, regras de domínio ou dados da conta demo. Seguem depois upload/download real de arquivo de ensaio autorizado, testes dos vínculos de anexos e paginação do arquivo transversal.
+
+## Ajuste visual de anexos e números em 08/10/2026
+
+| Atividade | Estado | Evidência ou limite |
+| --- | --- | --- |
+| Seletor de arquivo nos detalhes | Implementado e publicado | O botão nativo foi ocultado sob um controle acessível com ícone e nome do arquivo selecionado. Tipo, arquivo, observação e ação compartilham o mesmo alinhamento no desktop; a grade permanece responsiva. O envio continua usando o mesmo campo `file` e o armazenamento privado existente. |
+| Zero sem traço diagonal | Implementado e publicado | Valores e identificadores operacionais usam Geist Sans, preservando algarismos tabulares para alinhamento. Não houve mudança de valores, fórmulas ou precisão. |
+
+Validação: tipagem, ações de servidor e build de produção aprovados. Frontend `88b9b77` publicado no GitHub e deploy de produção `READY` na Vercel. Conferência autenticada no detalhe do contrato mostrou os três rótulos e controles na mesma altura, seletor nativo invisível e valores calculados em Geist Sans. A interação de upload/download não foi repetida nesta entrega; o fluxo funcional de arquivo de ensaio segue na próxima sequência, sem criar nem alterar documentos de produção neste ajuste.
+
+Próxima sequência sem depender de regra da JD: validar de ponta a ponta a seleção, o envio, a listagem e o download de um arquivo de ensaio apropriado; automatizar os vínculos dos anexos entre relatórios e objetos de origem; paginar a consulta transversal de documentos. Permanecem para aceite humano os cenários JD-01 a JD-04 e as decisões D02 a D04 e D10.
