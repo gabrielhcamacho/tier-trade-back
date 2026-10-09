@@ -62,6 +62,7 @@ describe('commercial foundation migration', () => {
       '20261008032742_optimize_dashboard_rls_initplan.sql',
       '20261008032945_optimize_dashboard_rls_function_initplan.sql',
       '20261008034318_index_active_dashboard_tenants.sql',
+      '20261008160000_grant_dashboard_pricing_read.sql',
     ]) {
       const migration = await readFile(new URL(`../../supabase/migrations/${migrationName}`, import.meta.url), 'utf8');
       await db.exec(migration);
@@ -170,7 +171,8 @@ describe('commercial foundation migration', () => {
     for (const module of DASHBOARD_MODULES) {
       const payload = await builder.build(db as unknown as PoolClient,
         '11111111-1111-4111-8111-111111111111', module);
-      expect(payload).toMatchObject({ contractVersion: 1, module });
+      expect(payload).toMatchObject({ contractVersion: 1, module, calendar: { timezone: 'America/Sao_Paulo' } });
+      expect(Object.keys(payload.breakdowns as object).length).toBeGreaterThan(0);
     }
     const database = {
       transaction: async <T>(_tenantId: string, operation: (client: PoolClient) => Promise<T>) =>

@@ -17,3 +17,18 @@ As respostas incluem `snapshotVersion`, `generatedAt`, `sourceWatermark`, `build
 Eventos próximos incrementam uma única versão pendente por módulo. Claims usam lease recuperável e `FOR UPDATE SKIP LOCKED`. O snapshot só é substituído por uma versão igual ou maior; se outro evento chegar durante o rebuild, a fila permanece pronta para uma nova passagem.
 
 O worker enumera tenants ativos em páginas de 100 por padrão. Múltiplas réplicas podem percorrer a mesma página: os locks da outbox e da fila de refresh impedem trabalho duplicado efetivo. Toda consulta de rebuild contém filtro explícito de tenant e também passa pela RLS forçada.
+
+## Composições por módulo
+
+Além de `indicators`, cada snapshot publica `calendar` (`today` e `timezone`, hoje fixo em `America/Sao_Paulo`) e coleções em `breakdowns`, todas com escopo de tenant e valores decimais como texto:
+
+- `central`: `flowByCommodity` (compra contratada/recebida e venda contratada/expedida), `dueByWeek` (vencidos e oito semanas de títulos a receber e a pagar) e `marginByContract`;
+- `commercial`: `openDemandByCommodity` (com compra e venda), `offerFunnel` (90 dias), `activityByWeek` (12 semanas), `priceBridgeByCommodity` (compra, custos e margem ponderados por volume, 180 dias) e `topCounterparties`;
+- `contracts`: `statusMix`, `obligationAging`, `deliveryByContract` (janela de entrega e volume recebido), `upcomingObligations` e `marginByContract`;
+- `operations`: `loadsByDay` (de sete dias atrás a treze dias à frente), `receivedByWeek`, `qualityLast30Days`, `occurrencesByCategory` e `upcomingLoads`;
+- `inventory`: `physicalByCommodity`, `physicalByLocation`, `movementsByWeek` e `lotGovernance`;
+- `risk`: `positions` (com `utilization_pct`) e `exposureByMonth` (saldo não entregue por mês de fim da janela);
+- `financial`: `dueByWeek`, `cashByMonth`, `aging` e `topReceivables`;
+- `fiscal`: `documentsByMonth`, `openTaxesByComponent`, `upcomingObligations` e `taxByMonth`.
+
+As coleções são aditivas dentro de `contractVersion` 1. Snapshots anteriores continuam válidos: o cliente mostra estado vazio para coleções ausentes até a próxima reconstrução, que a primeira leitura já agenda.
