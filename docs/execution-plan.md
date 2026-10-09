@@ -139,3 +139,15 @@ Próxima sequência sem depender de regra da JD: validar de ponta a ponta a sele
 Publicação: backend `8ba4cfe` implantado e `ACTIVE` na DigitalOcean; frontend `29554ad` com deploy de produção `READY` na Vercel. Na conta demo, `/documentos` exibiu um arquivo já existente, total de um registro e indicador “Página 1 de 1”. Nenhum arquivo foi enviado, baixado ou alterado nessa conferência. Build do backend e frontend aprovado; 43 testes do backend passaram no banco de teste do Colima. O índice de produção permanece pendente por falta de permissão de DDL, sem impedir a consulta no volume atual.
 
 Próxima sequência proposta sem depender de novas regras da JD: automatizar a cobertura dos vínculos de anexos a contratos, cargas e relatórios; melhorar a tela de documentos com busca por origem e acesso direto ao registro relacionado; retomar telas operacionais já previstas no plano, priorizando lacunas reais verificadas no código antes de abrir novos módulos. O envio de arquivo de ponta a ponta será testado com o usuário na sequência combinada. Decisões D02 a D04, D07, D08 e D10 continuam fora deste pacote.
+
+## Publicação das novas Visões Gerais em 08/10/2026
+
+| Atividade | Estado | Evidência ou limite |
+| --- | --- | --- |
+| Visões Gerais dos oito módulos | Publicadas | Frontend `51a69f9` no GitHub, deploy de produção `READY` na Vercel e alias `tier-trade-front.vercel.app` apontando para essa revisão. |
+| Snapshots e desdobramentos dos indicadores | Publicados | Backend `171cc54` no GitHub e deployment `ACTIVE` na DigitalOcean, com API e worker no serviço combinado existente. A API respondeu `ready` com banco `ok`. |
+| Banco de produção | Alinhado para este pacote | Migration idempotente `grant_dashboard_pricing_read` registrada; a permissão `SELECT` de runtime em `app.pricing_scenarios` foi confirmada. Os oito módulos têm snapshot persistido com `breakdowns`; fila de atualização sem erro pendente na conferência. |
+| Testes de regressão | Aprovados | Suíte completa do backend: 47 testes em 19 arquivos no PostgreSQL do Colima no HD externo. Build da API aprovado. No frontend, tipagem, verificação de server actions e build de produção aprovados antes da publicação. |
+| Teste visual autenticado | Pendente | O deploy, a saúde da API e os snapshots foram verificados, mas esta entrega não percorreu visualmente as oito telas com a conta demo em produção. |
+
+Próximo passo: conferir as oito Visões Gerais autenticadas, em desktop e largura menor, com dados da conta demo e estados sem dados. Depois retomar a prova real de upload/download e vínculos dos anexos, sem antecipar regras financeiras ou fiscais pendentes de validação da JD.
