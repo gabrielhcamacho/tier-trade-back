@@ -151,3 +151,13 @@ Próxima sequência proposta sem depender de novas regras da JD: automatizar a c
 | Teste visual autenticado | Pendente | O deploy, a saúde da API e os snapshots foram verificados, mas esta entrega não percorreu visualmente as oito telas com a conta demo em produção. |
 
 Próximo passo: conferir as oito Visões Gerais autenticadas, em desktop e largura menor, com dados da conta demo e estados sem dados. Depois retomar a prova real de upload/download e vínculos dos anexos, sem antecipar regras financeiras ou fiscais pendentes de validação da JD.
+
+## Dados nas Visões Gerais da conta demo em 08/10/2026
+
+- A conta `demo@tiertrade.com.br` foi identificada por associação ativa a um único tenant marcado como demonstração. Não houve reset da base, exclusão nem substituição dos registros que o usuário pode editar.
+- Os oito snapshots foram enfileirados novamente somente para esse tenant. A conferência posterior encontrou os oito módulos persistidos e nenhuma atualização pendente ou com erro. A sessão autenticada exibiu indicadores e gráficos de Central, Comercial, Contratos, Operações, Estoque, Risco, Financeiro e Fiscal.
+- O problema principal era a combinação de snapshots anteriores ao novo detalhamento e ausência de atualização automática da página após o worker recalcular. O frontend `22080e8` adicionou consulta automática limitada para estados `STALE` e `REBUILDING`; tipagem, verificação de server actions e build passaram, e o deploy de produção ficou `READY` na Vercel.
+- Evidência de origem: o tenant demo preserva 4 ofertas, 2 contratos de compra, 1 de venda, 3 cargas, 2 lotes, 2 títulos e 2 documentos fiscais. Esses dados alimentam os painéis por meio da API, não por números embutidos nas telas.
+- Limite honesto: no Fiscal, documentos e validações aparecem, mas gráficos de apuração, componentes tributários e obrigações continuam sem lançamentos porque a configuração fiscal está em rascunho e não existe cálculo homologado para o tenant. Não foram inventados tributos ou obrigações apenas para preencher a demonstração.
+
+Próxima sequência: testar a atualização automática em uma nova atualização assíncrona real e revisar a densidade dos gráficos com a conta demo; para enriquecer o cenário com soja e tributos, criar registros pelos fluxos de domínio e somente após validar as regras fiscais necessárias. Permanece também o teste completo de upload/download de anexos.
