@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../app.module.js';
+import { DashboardProcessor } from '../dashboard/dashboard.processor.js';
 import { createCorsOptions } from '../http/cors.js';
 import { OutboxProcessor } from '../outbox/outbox.processor.js';
 
@@ -67,6 +68,11 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     await setup.query(await readFile(new URL('../../supabase/migrations/20261007214736_cover_commercial_actor_foreign_keys_and_terms_rls.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261007222434_contract_lifecycle_and_version_references.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261008011332_bank_statement_import_batches.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261008032009_dashboard_read_model_foundation.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261008032742_optimize_dashboard_rls_initplan.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261008032945_optimize_dashboard_rls_function_initplan.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261008034318_index_active_dashboard_tenants.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261008160000_grant_dashboard_pricing_read.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../scripts/seed-local.sql', import.meta.url), 'utf8'));
     await setup.end();
 
@@ -130,18 +136,23 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     expect(afterClose.statusCode).toBe(409);
   });
 
-  it('serves the tenant-scoped overview and rejects unmodeled filters', async () => {
+  it('serves the tenant-scoped asynchronous overview snapshot', async () => {
     const server = app.getHttpAdapter().getInstance();
-    const overview = await server.inject({ method: 'GET', url: '/v1/overview?commodity=MILHO',
+    const initial = await server.inject({ method: 'GET', url: '/v1/overview',
       headers: identityHeaders });
+    expect(initial.statusCode).toBe(200);
+    expect(initial.json()).toMatchObject({ contractVersion: 1, module: 'central',
+      freshness: 'REBUILDING', payload: null });
+    expect(await app.get(DashboardProcessor).processTenant(identityHeaders['x-tenant-id']))
+      .toMatchObject({ built: 1, failed: 0 });
+    const overview = await server.inject({ method: 'GET', url: '/v1/overview', headers: identityHeaders });
     expect(overview.statusCode).toBe(200);
-    expect(overview.json()).toMatchObject({ contractVersion: 1, consistency: 'MULTI_TRANSACTION',
-      filters: { commodity: 'MILHO', financeScope: 'TENANT_CONSOLIDATED' },
-      indicators: { pendingApprovalCount: 0 }, access: { scope: 'TENANT' } });
-    const unsupported = await server.inject({ method: 'GET', url: '/v1/overview?crop=25%2F26',
+    expect(overview.json()).toMatchObject({ contractVersion: 1, module: 'central',
+      payload: { indicators: { pendingApprovals: 0 } } });
+    const unsupported = await server.inject({ method: 'GET', url: '/v1/dashboards/unsupported',
       headers: identityHeaders });
     expect(unsupported.statusCode).toBe(400);
-    expect(unsupported.json()).toMatchObject({ code: 'OVERVIEW_FILTER_NOT_MODELED' });
+    expect(unsupported.json()).toMatchObject({ code: 'DASHBOARD_MODULE_UNSUPPORTED' });
   });
 
   it('moves an offer requiring approval through to an active contract', async () => {
@@ -642,12 +653,18 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
         signed_signature_count: 1,
       }],
     });
+    const refresh = await server.inject({ method: 'POST', url: '/v1/dashboards/central/refresh',
+      headers: identityHeaders });
+    expect(refresh.statusCode, refresh.body).toBe(202);
+    expect(await app.get(DashboardProcessor).processTenant(identityHeaders['x-tenant-id']))
+      .toMatchObject({ failed: 0 });
     const overviewAfterContract = await server.inject({ method: 'GET',
-      url: '/v1/overview?commodity=MILHO', headers: identityHeaders });
+      url: '/v1/overview', headers: identityHeaders });
     expect(overviewAfterContract.statusCode).toBe(200);
     expect(overviewAfterContract.json()).toMatchObject({
-      charts: { marginComponents: [{ contractId: contract.contractId, policyVersion: 2 }] },
-      indicators: { purchaseContractedKg: '600000', pendingObligationCount: 1 },
+      payload: { indicators: { purchaseContractedKg: '600000.000000', pendingObligations: 1 },
+        breakdowns: { marginByContract: expect.arrayContaining([
+          expect.objectContaining({ contract_id: contract.contractId })]) } },
     });
     const overflow = await server.inject({
       method: 'POST', url: `/v1/contracts/${contract.contractId}/loads`, headers: identityHeaders,

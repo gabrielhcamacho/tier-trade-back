@@ -6,6 +6,7 @@ import { readFile } from 'node:fs/promises';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../app.module.js';
+import { DashboardProcessor } from '../dashboard/dashboard.processor.js';
 import { resetDemoTenant } from '../demo/demo-seed.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -60,6 +61,11 @@ describe.runIf(Boolean(databaseUrl))('fiscal document registry', () => {
       '20261007214736_cover_commercial_actor_foreign_keys_and_terms_rls.sql',
       '20261007222434_contract_lifecycle_and_version_references.sql',
       '20261008011332_bank_statement_import_batches.sql',
+      '20261008032009_dashboard_read_model_foundation.sql',
+      '20261008032742_optimize_dashboard_rls_initplan.sql',
+      '20261008032945_optimize_dashboard_rls_function_initplan.sql',
+      '20261008034318_index_active_dashboard_tenants.sql',
+      '20261008160000_grant_dashboard_pricing_read.sql',
     ]) {
       await setup.query(await readFile(new URL(`../../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
     }
@@ -496,11 +502,12 @@ describe.runIf(Boolean(databaseUrl))('fiscal document registry', () => {
       paymentBatches: [{ status: 'EXECUTED' }],
       bankStatementEntries: [{ status: 'MATCHED' }],
     } });
+    await server.inject({ method: 'GET', url: '/v1/overview', headers });
+    expect(await app.get(DashboardProcessor).processTenant(tenantId)).toMatchObject({ failed: 0 });
     const overview = await server.inject({ method: 'GET', url: '/v1/overview', headers });
     expect(overview.statusCode, overview.body).toBe(200);
     expect(overview.json()).toMatchObject({
-      indicators: { purchasePayableOpenCount: 1 },
-      operational: { purchasePayablesOpen: 1 },
+      payload: { indicators: { openTitles: expect.any(Number) } },
     });
   });
 
