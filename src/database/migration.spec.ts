@@ -58,6 +58,8 @@ describe('commercial foundation migration', () => {
       '20261007222434_contract_lifecycle_and_version_references.sql',
       '20261007224325_cover_document_contract_version_foreign_keys.sql',
       '20261008011332_bank_statement_import_batches.sql',
+      '20261009165000_dispatch_destination_receipts.sql',
+      '20261010002022_dispatch_delivery_requirements.sql',
       '20261008032009_dashboard_read_model_foundation.sql',
       '20261008032742_optimize_dashboard_rls_initplan.sql',
       '20261008032945_optimize_dashboard_rls_function_initplan.sql',

@@ -203,6 +203,8 @@ async function clearOperationalData(client: PoolClient, tenantId: string, actorI
   await client.query('SELECT app.delete_demo_operational_completeness($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_finance($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_fiscal_configuration($1,$2)', [tenantId, actorId]);
+  await client.query('SELECT app.delete_demo_delivery_requirements($1,$2)', [tenantId, actorId]);
+  await client.query('SELECT app.delete_demo_dispatch_destination_receipts($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_sales_fulfillment($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_inventory($1,$2)', [tenantId, actorId]);
   await client.query('SELECT app.delete_demo_operations_extensions($1,$2)', [tenantId, actorId]);

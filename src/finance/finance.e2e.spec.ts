@@ -61,6 +61,8 @@ describe.runIf(Boolean(databaseUrl))('financial receivables', () => {
       '20261007222434_contract_lifecycle_and_version_references.sql',
       '20261008011332_bank_statement_import_batches.sql',
       '20261008033921_document_archive_pagination.sql',
+      '20261009165000_dispatch_destination_receipts.sql',
+      '20261010002022_dispatch_delivery_requirements.sql',
     ];
     for (const migration of migrations) {
       await setup.query(await readFile(new URL(`../../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
@@ -132,6 +134,14 @@ describe.runIf(Boolean(databaseUrl))('financial receivables', () => {
         title: { number: 'TR-2026-0001', status: 'PARTIALLY_SETTLED', outstandingAmount: '7360.00' },
       }],
       settlements: [{ bankReference: 'PIX-DEMO-0001', amount: '4000.00', reversedAt: null }],
+      governance: { realizedMargin: { calculationScope: {
+        basis: 'OPERATIONAL_REALIZED_MARGIN_V1',
+        included: ['SALE_DISPATCH_REVENUE', 'ALLOCATED_PURCHASE_ACQUISITION_COST',
+          'ACTIVE_PURCHASE_COST_COMPONENTS'],
+        excluded: ['SALE_TAXES_AND_EXPENSES', 'COMMISSION_ACCRUALS',
+          'ADMINISTRATIVE_EXPENSES', 'ACCOUNTING_ENTRIES_AND_CLOSING'],
+        accountingResult: false,
+      } } },
     });
   });
 

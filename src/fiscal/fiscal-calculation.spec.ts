@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import Decimal from 'decimal.js';
 import { calculateFiscalMemory } from './fiscal-calculation.js';
 
 describe('calculateFiscalMemory', () => {
@@ -35,5 +36,36 @@ describe('calculateFiscalMemory', () => {
 
     expect(halfUp.taxTotal).toBe('0.01');
     expect(halfEven.taxTotal).toBe('0.00');
+  });
+
+  it('executes the exact synthetic VAL-03 quality-discount arithmetic without declaring a production rule', () => {
+    const purchasePayable = new Decimal('40000.00');
+    const simulatedRatePct = new Decimal('10.00');
+    const manuallyApprovedComponent = purchasePayable.mul(simulatedRatePct).div(100);
+
+    expect(manuallyApprovedComponent.toFixed(2)).toBe('4000.00');
+    expect(purchasePayable.minus(manuallyApprovedComponent).toFixed(2)).toBe('36000.00');
+  });
+
+  it('executes the isolated exact VAL-04 fiscal catalog on BRL 100,000.00', () => {
+    const grossAmount = new Decimal('100000.00');
+    const isolatedCatalog = [
+      { code: 'TRIBUTO_TESTE_A', ratePct: new Decimal('1.00') },
+      { code: 'TRIBUTO_TESTE_B', ratePct: new Decimal('0.20') },
+    ];
+    const components = isolatedCatalog.map((component) => ({
+      code: component.code,
+      amount: grossAmount.mul(component.ratePct).div(100).toFixed(2),
+    }));
+    const retainedTotal = components.reduce(
+      (total, component) => total.plus(component.amount), new Decimal(0),
+    );
+
+    expect(components).toEqual([
+      { code: 'TRIBUTO_TESTE_A', amount: '1000.00' },
+      { code: 'TRIBUTO_TESTE_B', amount: '200.00' },
+    ]);
+    expect(retainedTotal.toFixed(2)).toBe('1200.00');
+    expect(grossAmount.minus(retainedTotal).toFixed(2)).toBe('98800.00');
   });
 });

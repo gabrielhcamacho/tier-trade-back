@@ -32,7 +32,9 @@ function fixture() {
   ] }));
   const governanceWorkspace = vi.fn(async () => ({
     realizedMargin: { status: 'NO_DATA', revenueAmount: '0.00', totalCostAmount: '0.00',
-      realizedMarginAmount: '0.00', byCommodity: [] },
+      realizedMarginAmount: '0.00', calculationScope: {
+        basis: 'OPERATIONAL_REALIZED_MARGIN_V1', included: [], excluded: [], accountingResult: false,
+      }, byCommodity: [] },
     paymentBatches: [], bankStatementEntries: [],
   }));
   const riskWorkspace = vi.fn(async () => ({ positions: [] }));

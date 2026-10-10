@@ -1,5 +1,7 @@
 # Decisões pendentes do Tier Trade
 
+Atualizado em 09/10/2026 após validação do sistema com diretor de trading.
+
 O registro principal, com responsáveis por função e momento limite, está no [plano mestre da plataforma](../../tier-trade-platform/docs/plano-mestre.md#6-decisões-pendentes-com-momento-limite). Esta página mostra apenas os bloqueios próximos ao backend.
 
 ## Antes de ampliar modalidades contratuais
@@ -19,6 +21,18 @@ O primeiro piloto foi confirmado para a JD, com soja e milho e preço fixo. A es
 - **D09 — Migração:** fontes, responsáveis, volumes, mapeamentos, corte e tolerâncias, antes da slice 11.
 
 `Exemplos.xlsx` fornece cenários e perguntas; taxas e tratamentos nela vistos não estão homologados para uso oficial.
+
+## Decisões derivadas da validação com diretor de trading
+
+A pauta preenchida, os participantes, materiais e critérios de saída estão em [Workshop de decisões V01–V05](validation-workshop-v01-v05.md). Em 09/10/2026, as cinco decisões passaram para **em preparação**; nenhuma regra operacional ou fiscal foi homologada apenas pela criação da pauta.
+
+- **V01 — Vocabulário financeiro e gerencial:** aprovar os nomes, fórmulas e estados de receita expedida, custo apropriado, margem projetada, margem realizada, a pagar, a receber, recebido e caixa. Até a aprovação, a margem realizada permanece gerencial e não pode ser apresentada como margem líquida contábil. Responsáveis sugeridos: direção, financeiro, contabilidade e produto.
+- **V02 — Conciliação por carga:** definir qual expedição/nota de saída corresponde a cada recebimento/nota de entrada quando houver consolidação, fracionamento, mistura de lotes ou múltiplos destinos; aprovar o tratamento de diferença positiva e negativa de peso e valor. Responsáveis sugeridos: operações, fiscal e financeiro.
+- **V03 — Qualidade e desconto contratual:** aprovar por commodity os indicadores, tolerâncias, faixas, fórmula, arredondamento, contraprova, alçada e documento que autoriza o ajuste. A relação `1 p.p. excedente = 1% de desconto` é apenas um cenário candidato; não é regra global. Responsáveis sugeridos: qualidade, comercial, fiscal e jurídico.
+- **V04 — Requisitos por sacado e terminal:** listar para cada cliente/terminal os documentos e eventos que liberam reconhecimento da entrega e pagamento, prazo, responsável, portal, evidência de submissão e consequência sobre recebível, antecipação ou limite. Responsáveis sugeridos: logística, contas a receber e crédito.
+- **V05 — Portais externos prioritários:** fornecer a lista inicial de portais, volumes, credenciais disponíveis, termos de uso e contatos técnicos. A primeira entrega será workflow manual auditável; integração só entra no backlog após verificar API ou outro meio autorizado e calcular benefício. Responsáveis sugeridos: logística, TI e produto.
+
+Essas decisões complementam D03, D05, D06 e D09. Elas não autorizam cadastrar como padrão uma tolerância fixa entre balanças, uma tabela de desconto universal ou uma alíquota fiscal observada em exemplo isolado.
 
 ## Antes de abrir produção para operação não assistida
 

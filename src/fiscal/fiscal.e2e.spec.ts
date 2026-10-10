@@ -66,6 +66,8 @@ describe.runIf(Boolean(databaseUrl))('fiscal document registry', () => {
       '20261008032945_optimize_dashboard_rls_function_initplan.sql',
       '20261008034318_index_active_dashboard_tenants.sql',
       '20261008160000_grant_dashboard_pricing_read.sql',
+      '20261009165000_dispatch_destination_receipts.sql',
+      '20261010002022_dispatch_delivery_requirements.sql',
     ]) {
       await setup.query(await readFile(new URL(`../../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
     }
@@ -650,18 +652,30 @@ describe.runIf(Boolean(databaseUrl))('fiscal document registry', () => {
     expect(validatedPurchase.json()).toMatchObject({ status: 'VALIDATED', linkedTitleId: expect.any(String) });
     const finance = await server.inject({ method: 'GET', url: '/v1/finance', headers });
     const purchaseEvent = finance.json().events.find((event: { loadReceiptId: string }) =>
-      event.loadReceiptId === corrected.json().receipt.id) as { id: string };
+      event.loadReceiptId === corrected.json().receipt.id) as {
+        id: string; title: { outstandingAmount: string };
+      };
+    const inventoryBeforeDiscount = await server.inject({ method: 'GET', url: '/v1/inventory', headers });
+    const physicalBeforeDiscount = inventoryBeforeDiscount.json().summary.physicalWeightKg;
     const discount = await server.inject({
       method: 'POST', url: '/v1/finance/purchase-cost-components', headers,
       payload: {
         financialEventId: purchaseEvent.id, componentType: 'QUALITY_DISCOUNT', payableImpact: 'REDUCE_PAYABLE',
-        amount: '100.00', description: 'Valor explícito para exercitar o ajuste; sujeito à homologação da JD.',
-        externalReference: 'CONTRAPROVA-JD-SOJA-001',
+        amount: '4000.00',
+        description: 'VAL-03 sintético: 10% sobre base didática de R$ 40.000; não é regra homologada.',
+        externalReference: 'VAL-03-SINTETICO-10PCT',
       },
     });
     expect(discount.statusCode, discount.body).toBe(201);
 
+    const financeAfterDiscount = await server.inject({ method: 'GET', url: '/v1/finance', headers });
+    const adjustedPurchaseEvent = financeAfterDiscount.json().events.find((event: { id: string }) =>
+      event.id === purchaseEvent.id) as { title: { outstandingAmount: string } };
+    expect(new Decimal(purchaseEvent.title.outstandingAmount)
+      .minus(adjustedPurchaseEvent.title.outstandingAmount).toFixed(2)).toBe('4000.00');
+
     const inventory = await server.inject({ method: 'GET', url: '/v1/inventory', headers });
+    expect(inventory.json().summary.physicalWeightKg).toBe(physicalBeforeDiscount);
     const soyLot = inventory.json().lots.find((lot: { commodity: string; sourceLoadId: string }) =>
       lot.commodity === 'SOJA' && lot.sourceLoadId === load.json().id) as { id: string };
     expect(soyLot).toBeTruthy();
@@ -765,3 +779,13 @@ describe.runIf(Boolean(databaseUrl))('fiscal document registry', () => {
     expect(reconciled.json()).toMatchObject({ status: 'MATCHED' });
   });
 });
+
+async function refreshDashboards(app: NestFastifyApplication, targetTenantId: string) {
+  const processor = app.get(DashboardProcessor);
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const result = await processor.processTenant(targetTenantId);
+    expect(result.failed).toBe(0);
+    if (result.pending === 0) return;
+  }
+  throw new Error('Dashboard refresh queue did not drain.');
+}

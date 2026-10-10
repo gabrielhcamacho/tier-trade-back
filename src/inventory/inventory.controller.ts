@@ -6,6 +6,8 @@ import {
   allocationSchema,
   completeTransferSchema,
   dispatchSchema,
+  deliveryRequirementPolicySchema,
+  destinationReceiptSchema,
   inventoryCountSchema,
   inventoryLocationSchema,
   lossSchema,
@@ -14,9 +16,12 @@ import {
   salesContractStatusTransitionSchema,
   salesContractAmendmentSchema,
   startTransferSchema,
+  updateDeliveryRequirementSchema,
   type AllocationInput,
   type CompleteTransferInput,
   type DispatchInput,
+  type DeliveryRequirementPolicyInput,
+  type DestinationReceiptInput,
   type InventoryCountInput,
   type InventoryLocationInput,
   type LossInput,
@@ -25,6 +30,7 @@ import {
   type SalesContractStatusTransitionInput,
   type SalesContractAmendmentInput,
   type StartTransferInput,
+  type UpdateDeliveryRequirementInput,
 } from './inventory.schemas.js';
 import { InventoryService } from './inventory.service.js';
 
@@ -94,6 +100,26 @@ export class InventoryController {
   dispatch(@Identity() identity: RequestIdentity,
     @Body(new SchemaPipe(dispatchSchema)) input: DispatchInput) {
     return this.service.dispatch(identity.tenantId, identity.actorId, input);
+  }
+
+  @Post('dispatches/:dispatchId/destination-receipts')
+  recordDestinationReceipt(@Identity() identity: RequestIdentity,
+    @Param('dispatchId', ParseUUIDPipe) dispatchId: string,
+    @Body(new SchemaPipe(destinationReceiptSchema)) input: DestinationReceiptInput) {
+    return this.service.recordDestinationReceipt(identity.tenantId, identity.actorId, dispatchId, input);
+  }
+
+  @Post('delivery-requirement-policies')
+  createDeliveryRequirementPolicy(@Identity() identity: RequestIdentity,
+    @Body(new SchemaPipe(deliveryRequirementPolicySchema)) input: DeliveryRequirementPolicyInput) {
+    return this.service.createDeliveryRequirementPolicy(identity.tenantId, identity.actorId, input);
+  }
+
+  @Put('delivery-requirements/:requirementId')
+  updateDeliveryRequirement(@Identity() identity: RequestIdentity,
+    @Param('requirementId', ParseUUIDPipe) requirementId: string,
+    @Body(new SchemaPipe(updateDeliveryRequirementSchema)) input: UpdateDeliveryRequirementInput) {
+    return this.service.updateDeliveryRequirement(identity.tenantId, identity.actorId, requirementId, input);
   }
 
   @Post('locations')

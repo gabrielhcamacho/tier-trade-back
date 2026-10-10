@@ -6,9 +6,10 @@ import { DatabasePlatformPort } from '../database/database.js';
 import { FinancialProjectionPort } from '../finance/finance.port.js';
 import { InventoryReceiptPort, type ApplyReceiptToInventoryInput } from './inventory.port.js';
 import type {
-  AllocationInput, CompleteTransferInput, DispatchInput, InventoryCountInput,
-  InventoryLocationInput, LossInput, LotClassificationInput, SalesContractInput,
+  AllocationInput, CompleteTransferInput, DestinationReceiptInput, DispatchInput, InventoryCountInput,
+  DeliveryRequirementPolicyInput, InventoryLocationInput, LossInput, LotClassificationInput, SalesContractInput,
   SalesContractStatusTransitionInput, SalesContractAmendmentInput, StartTransferInput,
+  UpdateDeliveryRequirementInput,
 } from './inventory.schemas.js';
 
 interface LotPositionRow {
@@ -177,12 +178,115 @@ export class InventoryService extends InventoryReceiptPort {
           ORDER BY a.created_at DESC,a.id DESC`, [tenantId]);
       const dispatches = await client.query(
         `SELECT d.id,d.allocation_id,a.sales_contract_version_number,d.quantity_kg::text,d.dispatched_at,d.vehicle_plate,
-                d.document_reference,d.notes,d.created_at,sc.reference AS contract_reference,lot.lot_code
+                d.document_reference,d.notes,d.created_at,sc.reference AS contract_reference,lot.lot_code,
+                dr.id AS destination_receipt_id,dr.version AS destination_receipt_version,
+                dr.destination_weight_kg::text,dr.unloaded_at,dr.terminal_code,dr.ticket_reference,
+                dr.destination_document_reference,dr.reason AS destination_receipt_reason,
+                dr.notes AS destination_receipt_notes,
+                CASE WHEN dr.id IS NULL THEN NULL
+                     ELSE (dr.destination_weight_kg-d.quantity_kg)::text END AS destination_difference_kg
            FROM app.inventory_dispatches d
            JOIN app.inventory_allocations a ON (a.tenant_id,a.id)=(d.tenant_id,d.allocation_id)
            JOIN app.sales_contracts sc ON (sc.tenant_id,sc.id)=(a.tenant_id,a.sales_contract_id)
            JOIN app.inventory_lots lot ON (lot.tenant_id,lot.id)=(a.tenant_id,a.lot_id)
+           LEFT JOIN app.dispatch_destination_receipts dr
+             ON (dr.tenant_id,dr.dispatch_id)=(d.tenant_id,d.id) AND dr.is_current=true
           WHERE d.tenant_id=$1 ORDER BY d.created_at DESC,d.id DESC`, [tenantId]);
+      const economicReconciliations = await client.query(
+        `SELECT d.id AS dispatch_id,d.dispatched_at,d.document_reference AS dispatch_document_reference,
+                d.quantity_kg::text AS dispatched_weight_kg,
+                lot.source_load_id,lot.contract_id AS purchase_contract_id,l.contract_version_number AS purchase_contract_version_number,
+                a.sales_contract_id,a.sales_contract_version_number,sc.reference AS sales_contract_reference,
+                cp.legal_name AS counterparty_name,lot.lot_code,
+                dr.destination_weight_kg::text,dr.ticket_reference,
+                sfe.id AS financial_event_id,sfe.calculation_status AS revenue_calculation_status,
+                sfe.calculated_amount::text AS revenue_amount,
+                pfe.id AS purchase_financial_event_id,
+                CASE WHEN pfe.calculated_amount IS NULL OR pfe.quantity_kg=0 THEN NULL
+                     ELSE (((d.quantity_kg/pfe.quantity_kg)*pfe.calculated_amount)::numeric(20,2))::text
+                END AS allocated_acquisition_cost_amount,
+                CASE WHEN pfe.calculated_amount IS NULL OR pfe.quantity_kg=0 THEN NULL
+                     ELSE (((d.quantity_kg/pfe.quantity_kg)*COALESCE(pcomp.net_component,0))::numeric(20,2))::text
+                END AS allocated_component_impact_amount,
+                CASE WHEN sfe.calculated_amount IS NULL OR pfe.calculated_amount IS NULL OR pfe.quantity_kg=0 THEN NULL
+                     ELSE ((sfe.calculated_amount-
+                       ((d.quantity_kg/pfe.quantity_kg)*(pfe.calculated_amount+COALESCE(pcomp.net_component,0))))
+                       ::numeric(20,2))::text
+                END AS operational_margin_amount,
+                fd.id AS fiscal_document_id,fd.document_number AS fiscal_document_number,
+                fd.status AS fiscal_document_status,fd.total_amount::text AS fiscal_document_amount,
+                ft.id AS title_id,ft.title_number,ft.status AS title_status,ft.due_date::text,
+                ft.amount::text AS title_amount,COALESCE(st.settled_amount,0)::text AS settled_amount,
+                CASE WHEN ft.id IS NULL THEN NULL ELSE
+                  GREATEST(ft.amount-COALESCE(adj.adjusted_amount,0)-COALESCE(st.settled_amount,0),0)::text
+                END AS outstanding_amount
+           FROM app.inventory_dispatches d
+           JOIN app.inventory_allocations a ON (a.tenant_id,a.id)=(d.tenant_id,d.allocation_id)
+           JOIN app.sales_contracts sc ON (sc.tenant_id,sc.id)=(a.tenant_id,a.sales_contract_id)
+           JOIN app.counterparties cp ON (cp.tenant_id,cp.id)=(sc.tenant_id,sc.counterparty_id)
+           JOIN app.inventory_lots lot ON (lot.tenant_id,lot.id)=(a.tenant_id,a.lot_id)
+           JOIN app.loads l ON (l.tenant_id,l.id)=(lot.tenant_id,lot.source_load_id)
+           LEFT JOIN app.dispatch_destination_receipts dr
+             ON (dr.tenant_id,dr.dispatch_id)=(d.tenant_id,d.id) AND dr.is_current=true
+           LEFT JOIN app.financial_events sfe
+             ON sfe.tenant_id=d.tenant_id AND sfe.inventory_dispatch_id=d.id
+            AND sfe.event_type='SALE_DISPATCH_RECEIVABLE'
+           LEFT JOIN app.load_receipts lr
+             ON (lr.tenant_id,lr.load_id)=(l.tenant_id,l.id) AND lr.is_current=true
+           LEFT JOIN app.financial_events pfe
+             ON pfe.tenant_id=lr.tenant_id AND pfe.load_receipt_id=lr.id
+            AND pfe.event_type='PURCHASE_RECEIPT_PAYABLE'
+           LEFT JOIN LATERAL (
+             SELECT COALESCE(sum(CASE component.payable_impact
+               WHEN 'INCREASE_PAYABLE' THEN component.amount
+               WHEN 'REDUCE_PAYABLE' THEN -component.amount ELSE 0 END)
+               FILTER (WHERE component.reversed_at IS NULL),0)::numeric(20,2) AS net_component
+               FROM app.purchase_cost_components component
+              WHERE component.tenant_id=pfe.tenant_id AND component.financial_event_id=pfe.id
+           ) pcomp ON true
+           LEFT JOIN app.fiscal_documents fd
+             ON fd.tenant_id=sfe.tenant_id AND fd.financial_event_id=sfe.id
+           LEFT JOIN app.financial_titles ft
+             ON ft.tenant_id=sfe.tenant_id AND ft.financial_event_id=sfe.id
+           LEFT JOIN LATERAL (
+             SELECT COALESCE(sum(settlement.amount) FILTER (WHERE settlement.reversed_at IS NULL),0)::numeric(20,2)
+                    AS settled_amount
+               FROM app.financial_settlements settlement
+              WHERE settlement.tenant_id=ft.tenant_id AND settlement.title_id=ft.id
+           ) st ON true
+           LEFT JOIN LATERAL (
+             SELECT COALESCE(sum(CASE adjustment.adjustment_effect
+               WHEN 'INCREASE' THEN -adjustment.amount ELSE adjustment.amount END)
+               FILTER (WHERE adjustment.reversed_at IS NULL),0)::numeric(20,2) AS adjusted_amount
+               FROM app.financial_title_adjustments adjustment
+              WHERE adjustment.tenant_id=ft.tenant_id AND adjustment.title_id=ft.id
+           ) adj ON true
+          WHERE d.tenant_id=$1
+          ORDER BY d.dispatched_at DESC,d.id DESC`, [tenantId]);
+      const deliveryRequirementPolicies = await client.query(
+        `SELECT p.id,p.counterparty_id,cp.legal_name AS counterparty_name,p.terminal_code,
+                p.requirement_type,p.version,p.title,p.responsible_name,p.due_hours_after_dispatch,
+                p.portal_name,p.portal_url,p.consequence,p.active,p.created_at
+           FROM app.delivery_requirement_policies p
+           JOIN app.counterparties cp ON (cp.tenant_id,cp.id)=(p.tenant_id,p.counterparty_id)
+          WHERE p.tenant_id=$1 AND p.active=true
+          ORDER BY cp.legal_name,p.terminal_code,p.requirement_type`, [tenantId]);
+      const deliveryRequirements = await client.query(
+        `SELECT r.id,r.dispatch_id,r.policy_id,r.policy_version,r.requirement_type,r.title,
+                r.responsible_name,r.due_at,r.portal_name,r.portal_url,r.consequence,r.status,
+                r.evidence_reference,r.portal_confirmation,r.notes,r.resolution_reason,
+                r.submitted_at,r.resolved_at,r.created_at,r.updated_at,
+                sc.reference AS contract_reference,cp.legal_name AS counterparty_name,
+                p.terminal_code,d.document_reference
+           FROM app.dispatch_delivery_requirements r
+           JOIN app.inventory_dispatches d ON (d.tenant_id,d.id)=(r.tenant_id,r.dispatch_id)
+           JOIN app.inventory_allocations a ON (a.tenant_id,a.id)=(d.tenant_id,d.allocation_id)
+           JOIN app.sales_contracts sc ON (sc.tenant_id,sc.id)=(a.tenant_id,a.sales_contract_id)
+           JOIN app.counterparties cp ON (cp.tenant_id,cp.id)=(sc.tenant_id,sc.counterparty_id)
+           JOIN app.delivery_requirement_policies p ON (p.tenant_id,p.id)=(r.tenant_id,r.policy_id)
+          WHERE r.tenant_id=$1
+          ORDER BY CASE r.status WHEN 'PENDING' THEN 0 WHEN 'REJECTED' THEN 1 WHEN 'SUBMITTED' THEN 2 ELSE 3 END,
+                   r.due_at,r.created_at`, [tenantId]);
       const counterparties = await client.query(
         `SELECT id,legal_name FROM app.counterparties WHERE tenant_id=$1 ORDER BY legal_name,id`, [tenantId]);
       const locations = await client.query(
@@ -268,6 +372,9 @@ export class InventoryService extends InventoryReceiptPort {
         salesContracts: salesContracts.rows,
         allocations: allocations.rows,
         dispatches: dispatches.rows,
+        economicReconciliations: economicReconciliations.rows,
+        deliveryRequirementPolicies: deliveryRequirementPolicies.rows,
+        deliveryRequirements: deliveryRequirements.rows,
         counterparties: counterparties.rows,
         locations: locations.rows,
         transfers: transfers.rows,
@@ -597,9 +704,9 @@ export class InventoryService extends InventoryReceiptPort {
     return this.db.transaction(tenantId, async (client) => {
       await this.assertCapability(client, tenantId, actorId, 'OPERATIONS_EDIT');
       const allocation = await client.query<{
-        status: string; quantity_kg: string; lot_id: string;
+        status: string; quantity_kg: string; lot_id: string; sales_contract_id: string;
       }>(
-        `SELECT status,quantity_kg::text,lot_id FROM app.inventory_allocations
+        `SELECT status,quantity_kg::text,lot_id,sales_contract_id FROM app.inventory_allocations
           WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
         [tenantId, input.allocationId]);
       if (!allocation.rows[0]) throw new NotFoundException({ code: 'ALLOCATION_NOT_FOUND' });
@@ -633,6 +740,17 @@ export class InventoryService extends InventoryReceiptPort {
          VALUES ($1,$2,$3,$4,$5,'DISPATCH',$6,$7,$8)`,
         [tenantId, randomUUID(), allocation.rows[0].lot_id, input.allocationId, id,
           quantity.negated().toFixed(3), input.dispatchedAt, actorId]);
+      await client.query(
+        `INSERT INTO app.dispatch_delivery_requirements
+          (tenant_id,id,dispatch_id,policy_id,policy_version,requirement_type,title,responsible_name,
+           due_at,portal_name,portal_url,consequence,created_by,updated_by)
+         SELECT $1,gen_random_uuid(),$2,p.id,p.version,p.requirement_type,p.title,p.responsible_name,
+                $3::timestamptz + make_interval(hours => p.due_hours_after_dispatch),
+                p.portal_name,p.portal_url,p.consequence,$4,$4
+           FROM app.delivery_requirement_policies p
+           JOIN app.sales_contracts sc ON (sc.tenant_id,sc.counterparty_id)=(p.tenant_id,p.counterparty_id)
+          WHERE p.tenant_id=$1 AND sc.id=$5 AND p.terminal_code=sc.destination_code AND p.active=true`,
+        [tenantId, id, input.dispatchedAt, actorId, allocation.rows[0].sales_contract_id]);
       if (quantity.equals(remaining)) {
         await client.query(`UPDATE app.inventory_allocations SET status='FULFILLED'
           WHERE tenant_id=$1 AND id=$2`, [tenantId, input.allocationId]);
@@ -645,6 +763,128 @@ export class InventoryService extends InventoryReceiptPort {
         id, allocationId: input.allocationId, quantityKg: quantity.toFixed(3), status: 'CONFIRMED',
         ...projection,
       };
+    });
+  }
+
+  recordDestinationReceipt(tenantId: string, actorId: string, dispatchId: string,
+    input: DestinationReceiptInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'OPERATIONS_EDIT');
+      const dispatch = await client.query<{ quantity_kg: string; dispatched_at: Date }>(
+        `SELECT quantity_kg::text,dispatched_at FROM app.inventory_dispatches
+          WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenantId, dispatchId]);
+      if (!dispatch.rows[0]) throw new NotFoundException({ code: 'DISPATCH_NOT_FOUND' });
+      if (new Date(input.unloadedAt) < dispatch.rows[0].dispatched_at) {
+        throw new UnprocessableEntityException({ code: 'DESTINATION_UNLOAD_PRECEDES_DISPATCH' });
+      }
+      const current = await client.query<{ id: string; version: number }>(
+        `SELECT id,version FROM app.dispatch_destination_receipts
+          WHERE tenant_id=$1 AND dispatch_id=$2 AND is_current=true FOR UPDATE`,
+        [tenantId, dispatchId]);
+      const previous = current.rows[0] ?? null;
+      if (previous) {
+        await client.query(
+          `UPDATE app.dispatch_destination_receipts SET is_current=false
+            WHERE tenant_id=$1 AND id=$2`, [tenantId, previous.id]);
+      }
+      const id = randomUUID();
+      const version = (previous?.version ?? 0) + 1;
+      const destinationWeight = new Decimal(input.destinationWeightKg);
+      const dispatchedWeight = new Decimal(dispatch.rows[0].quantity_kg);
+      await client.query(
+        `INSERT INTO app.dispatch_destination_receipts
+          (tenant_id,id,dispatch_id,version,destination_weight_kg,unloaded_at,terminal_code,
+           ticket_reference,destination_document_reference,reason,notes,is_current,supersedes_id,created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,true,$12,$13)`,
+        [tenantId, id, dispatchId, version, destinationWeight.toFixed(3), input.unloadedAt,
+          input.terminalCode, input.ticketReference, input.destinationDocumentReference,
+          input.reason, input.notes, previous?.id ?? null, actorId]);
+      await client.query(
+        `UPDATE app.dispatch_delivery_requirements
+            SET evidence_reference=$3,notes=COALESCE(notes,$4),updated_by=$5,updated_at=now()
+          WHERE tenant_id=$1 AND dispatch_id=$2 AND requirement_type='DESTINATION_TICKET'
+            AND status IN ('PENDING','SUBMITTED','REJECTED')`,
+        [tenantId, dispatchId, input.ticketReference, input.notes, actorId]);
+      const result = {
+        id,
+        dispatchId,
+        version,
+        dispatchedWeightKg: dispatchedWeight.toFixed(3),
+        destinationWeightKg: destinationWeight.toFixed(3),
+        differenceKg: destinationWeight.minus(dispatchedWeight).toFixed(3),
+        unloadedAt: input.unloadedAt,
+        terminalCode: input.terminalCode,
+        ticketReference: input.ticketReference,
+        destinationDocumentReference: input.destinationDocumentReference,
+        financialEffectStatus: 'PENDING_POLICY' as const,
+      };
+      await this.record(client, tenantId, actorId, 'inventory.destination_receipt_recorded',
+        'inventory_dispatch', dispatchId, { ...result, reason: input.reason, notes: input.notes });
+      return result;
+    });
+  }
+
+  createDeliveryRequirementPolicy(tenantId: string, actorId: string,
+    input: DeliveryRequirementPolicyInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'OPERATIONS_EDIT');
+      const counterparty = await client.query(
+        `SELECT 1 FROM app.counterparties WHERE tenant_id=$1 AND id=$2`,
+        [tenantId, input.counterpartyId]);
+      if (!counterparty.rows[0]) throw new NotFoundException({ code: 'COUNTERPARTY_NOT_FOUND' });
+      const current = await client.query<{ version: number }>(
+        `SELECT version FROM app.delivery_requirement_policies
+          WHERE tenant_id=$1 AND counterparty_id=$2 AND terminal_code=$3 AND requirement_type=$4
+          ORDER BY version DESC LIMIT 1 FOR UPDATE`,
+        [tenantId, input.counterpartyId, input.terminalCode, input.requirementType]);
+      const version = (current.rows[0]?.version ?? 0) + 1;
+      if (current.rows[0]) {
+        await client.query(
+          `UPDATE app.delivery_requirement_policies SET active=false
+            WHERE tenant_id=$1 AND counterparty_id=$2 AND terminal_code=$3 AND requirement_type=$4 AND active=true`,
+          [tenantId, input.counterpartyId, input.terminalCode, input.requirementType]);
+      }
+      const id = randomUUID();
+      const result = await client.query(
+        `INSERT INTO app.delivery_requirement_policies
+          (tenant_id,id,counterparty_id,terminal_code,requirement_type,version,title,responsible_name,
+           due_hours_after_dispatch,portal_name,portal_url,consequence,created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+         RETURNING id,counterparty_id,terminal_code,requirement_type,version,title,responsible_name,
+                   due_hours_after_dispatch,portal_name,portal_url,consequence,active,created_at`,
+        [tenantId, id, input.counterpartyId, input.terminalCode, input.requirementType, version,
+          input.title, input.responsibleName, input.dueHoursAfterDispatch, input.portalName,
+          input.portalUrl, input.consequence, actorId]);
+      await this.record(client, tenantId, actorId, 'inventory.delivery_requirement_policy_created',
+        'delivery_requirement_policy', id, { ...input, version });
+      return result.rows[0];
+    });
+  }
+
+  updateDeliveryRequirement(tenantId: string, actorId: string, requirementId: string,
+    input: UpdateDeliveryRequirementInput) {
+    return this.db.transaction(tenantId, async (client) => {
+      await this.assertCapability(client, tenantId, actorId, 'OPERATIONS_EDIT');
+      const current = await client.query<{ dispatch_id: string; status: string }>(
+        `SELECT dispatch_id,status FROM app.dispatch_delivery_requirements
+          WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenantId, requirementId]);
+      if (!current.rows[0]) throw new NotFoundException({ code: 'DELIVERY_REQUIREMENT_NOT_FOUND' });
+      const resolved = ['ACCEPTED', 'REJECTED', 'WAIVED'].includes(input.status);
+      const result = await client.query(
+        `UPDATE app.dispatch_delivery_requirements
+            SET status=$3,evidence_reference=$4,portal_confirmation=$5,notes=$6,resolution_reason=$7,
+                submitted_at=CASE WHEN $3='SUBMITTED' THEN COALESCE(submitted_at,now()) ELSE submitted_at END,
+                resolved_at=CASE WHEN $8 THEN now() ELSE NULL END,updated_by=$9,updated_at=now()
+          WHERE tenant_id=$1 AND id=$2
+        RETURNING id,dispatch_id,policy_id,policy_version,requirement_type,title,responsible_name,due_at,
+                  portal_name,portal_url,consequence,status,evidence_reference,portal_confirmation,notes,
+                  resolution_reason,submitted_at,resolved_at,created_at,updated_at`,
+        [tenantId, requirementId, input.status, input.evidenceReference, input.portalConfirmation,
+          input.notes, input.reason, resolved, actorId]);
+      await this.record(client, tenantId, actorId, 'inventory.delivery_requirement_updated',
+        'inventory_dispatch', current.rows[0].dispatch_id,
+        { requirementId, beforeStatus: current.rows[0].status, ...input });
+      return result.rows[0];
     });
   }
 

@@ -441,6 +441,21 @@ export class FinanceGovernanceService {
   }
 
   private async realizedMargin(client: PoolClient, tenantId: string) {
+    const calculationScope = {
+      basis: 'OPERATIONAL_REALIZED_MARGIN_V1',
+      included: [
+        'SALE_DISPATCH_REVENUE',
+        'ALLOCATED_PURCHASE_ACQUISITION_COST',
+        'ACTIVE_PURCHASE_COST_COMPONENTS',
+      ],
+      excluded: [
+        'SALE_TAXES_AND_EXPENSES',
+        'COMMISSION_ACCRUALS',
+        'ADMINISTRATIVE_EXPENSES',
+        'ACCOUNTING_ENTRIES_AND_CLOSING',
+      ],
+      accountingResult: false,
+    } as const;
     const rows = await client.query<{ commodity: string; revenue: string; acquisition_cost: string; components: string; dispatched_kg: string }>(
       `SELECT il.commodity,
         sum(sfe.calculated_amount)::text AS revenue,
@@ -471,7 +486,8 @@ export class FinanceGovernanceService {
       revenue: acc.revenue.plus(row.revenueAmount), cost: acc.cost.plus(row.totalCostAmount),
     }), { revenue: new Decimal(0), cost: new Decimal(0) });
     return { status: byCommodity.length ? 'COMPLETE' : 'NO_DATA', revenueAmount: total.revenue.toFixed(2),
-      totalCostAmount: total.cost.toFixed(2), realizedMarginAmount: total.revenue.minus(total.cost).toFixed(2), byCommodity };
+      totalCostAmount: total.cost.toFixed(2), realizedMarginAmount: total.revenue.minus(total.cost).toFixed(2),
+      calculationScope, byCommodity };
   }
 
   private async refreshTitleStatus(client: PoolClient, tenantId: string, titleId: string) {

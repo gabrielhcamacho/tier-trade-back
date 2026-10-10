@@ -1,6 +1,6 @@
 # Plano vivo de execução do Tier Trade
 
-Atualizado em 08/10/2026. Este documento é atualizado junto com cada entrega para evitar retrabalho e distinguir desenvolvimento, validação técnica e dependências externas.
+Atualizado em 09/10/2026. Este documento é atualizado junto com cada entrega para evitar retrabalho e distinguir desenvolvimento, validação técnica e dependências externas.
 
 ## Estado das fases
 
@@ -45,13 +45,87 @@ Atualizado em 08/10/2026. Este documento é atualizado junto com cada entrega pa
 - D09: integrações externas efetivamente contratadas para produção.
 - D10: confirmar se a NF-e fiscal de compra deve obrigatoriamente manter o mesmo número e chave da NF-e do recebimento, e qual é o rito quando o documento de origem precisa ser corrigido. O backend atual não compara o número ao registrar o documento fiscal.
 
+## Recalibração após validação com diretor de trading em 09/10/2026
+
+A validação confirmou a direção do produto — centralização, agenda de cargas, estoque físico, fluxo de caixa, preço médio, margem projetada e rastreabilidade — e não autoriza reimplementar capacidades que já existem. O próximo ciclo deve provar e completar o encadeamento econômico por carga: contrato, qualidade, pesos, custos, tributos, documentos, nota de compra, nota de venda, títulos e caixa.
+
+| Frente | Estado encontrado | Incremento necessário | Gate de saída |
+| --- | --- | --- | --- |
+| Semântica financeira | Previsão, título, baixa, margem projetada e margem realizada já existem, mas podem ser confundidos na apresentação. | Definir glossário único e exibir composição/rastreabilidade de receita bruta, custo apropriado, margem projetada, margem realizada, a pagar, a receber e caixa. | Nenhum KPI financeiro é exibido sem nome, período, estado e memória; o usuário chega do indicador ao fato de origem. |
+| Conciliação origem–destino | Pesos de recebimento, estoque, expedição, notas e títulos existem em módulos separados. | Criar uma visão por carga que confronte peso e valor de origem com peso e valor de destino, mostrando ganho/perda física, efeito monetário e causas. | Um cenário com diferença positiva e outro com diferença negativa fecham sem cálculo paralelo. |
+| Qualidade e desconto | Indicadores, decisão humana e versionamento existem; valores oficiais continuam bloqueados por D02/D03. | Homologar tabela por commodity e contrato; aplicar desconto/bonificação com memória, contraprova, aprovação e ajuste financeiro, sem tratar a relação `1 p.p. = 1%` como regra universal. | O laudo explica peso/valor aceitos, ajuste da nota/título e reflexo posterior na margem e no estoque. |
+| Formação de preço e margem | Custos persistidos e margem gerencial existem. | Garantir que classificação, frete, despesas contratuais, tributos e ajustes de qualidade participem da formação e da ponte projetado–realizado. | A margem final de um contrato com múltiplas cargas é reproduzível por componente e por carga. |
+| Fiscal automático com revisão | Motor configurável, versionado e auditável existe; a matriz oficial da JD continua pendente. | Cadastrar catálogo governado por produto, UF de origem/destino, perfil da contraparte, natureza da operação e vigência; selecionar a regra aplicável automaticamente e exigir revisão quando houver ambiguidade. | Os cenários fiscais homologados são selecionados sem o operador montar alíquotas a cada contrato e mantêm memória da versão usada. |
+| Entrada, saída e liquidação | NF de compra, NF de saída, contas a pagar/receber, baixas e estornos já existem. | Validar o pareamento por carga e contrato e resolver D10 para a cadeia documental de compra. | Compra e venda correlacionadas explicam quantidades, valores, vencimentos e saldos sem duplicidade. |
+| Ticket de descarga e requisitos do sacado | Workflow manual e auditável implementado por sacado/terminal, com política versionada, responsável, prazo, ticket, portal, situação e consequência configurada. | Homologar V04 para decidir quando a consequência deixa de ser apenas informativa e passa a bloquear fechamento ou antecipação. | Uma expedição materializa a regra vigente e permanece na fila até envio, aceite, rejeição ou dispensa; nenhum bloqueio financeiro é inferido antes de V04. |
+| Cotas e portais externos | Integrações ainda dependem de D09 e de viabilidade por provedor. | Primeiro operar checklist e evidência manual; depois levantar Rumo, Origem, CTA, Cutrale e demais portais, classificando API, credencial, termo de uso, estabilidade e retorno econômico. | Nenhuma automação é prometida antes de prova técnica por portal; o fluxo manual auditável permanece disponível. |
+| Documentos/XML | Arquivo privado, upload, download e vínculos já existem. | Provar o fluxo real com arquivo autorizado e completar vínculos de XML, laudo, ticket e comprovante com carga/nota/contrato. | Documento real é localizado pela operação, baixado com autorização e preserva versão e auditoria. |
+
+### Premissas de implementação
+
+- Diferença entre balanças não recebe tolerância legal fixa no produto; o limite é contratual/configurável e a conformidade metrológica da balança é informação separada.
+- `FETHAB`, `INDEA-MT`, `IAGRO-MS`, `SENAR` e demais itens devem ser tratados como conceitos distintos, com jurisdição, vigência, base e responsabilidade explícitas.
+- A configuração fiscal continua versionada e auditável, mas o operador comum recebe uma regra sugerida pelo catálogo, em vez de reconstruir a tributação manualmente.
+- Ticket de descarga pode ser requisito de cobrança, antecipação ou liberação de limite, mas esse efeito é parametrizado por sacado e produto financeiro.
+- Margem realizada gerencial não será chamada de margem líquida contábil enquanto D07 não estiver resolvida.
+
+### Início da etapa 1 em 09/10/2026
+
+A pauta [Workshop de decisões V01–V05](validation-workshop-v01-v05.md) foi preparada com recomendações, participantes, materiais prévios, perguntas de decisão e gates. V01–V05 estão **em preparação**, não aprovadas. A inspeção do sistema confirmou dois limites que precisam estar explícitos na reunião: a margem realizada atual não equivale à margem líquida contábil e a expedição ainda não registra o peso aceito no destino/ticket como fato próprio.
+
+### Início da etapa 2 em 09/10/2026
+
+Os cinco ensaios foram especificados em [Cenários de validação V01–V05](pilot-validation-scenarios-v01-v05.md), sempre com números sintéticos identificados e sem transformar simulação em regra oficial. A API passou a declarar o escopo da margem operacional realizada, incluindo e excluindo componentes explicitamente. A interface foi ajustada para distinguir fluxo líquido realizado de saldo bancário e margem operacional de margem líquida contábil. A conciliação origem–destino continua bloqueada apenas na consequência de negócio; o próximo incremento técnico pode registrar peso/ticket de destino sem aplicar tolerância ou ajuste automático.
+
+Validação deste incremento: 24 testes locais aprovados, compilação da API aprovada, além de tipagem, verificação de ações de servidor e build de produção do frontend aprovados. A revisão React não encontrou novo estado, efeito, dependência de navegador ou aumento de fronteira cliente. A validação PostgreSQL integrada foi concluída na etapa seguinte.
+
+### Etapa 3 — primeiro incremento de conciliação em 09/10/2026
+
+Foi implementado o registro versionado do peso aceito e do ticket no destino por expedição. Uma correção preserva a versão anterior, o motivo e a auditoria; o quadro de estoque confronta peso expedido e peso aceito e mostra a diferença física positiva, negativa ou zero. Este evento não altera estoque, nota, título, caixa ou margem e sempre informa `PENDING_POLICY` enquanto V02–V04 não forem aprovadas.
+
+O fluxo inclui migração com isolamento por tenant, permissão operacional, limpeza segura do ambiente demo, endpoint autenticado, validação temporal da descarga, formulário e quadro de conciliação. O teste integrado cobre peso positivo e correção para peso negativo. A migração foi aplicada pelo teste local em PGlite e pelo PostgreSQL descartável; os builds da API e do frontend, a tipagem e a verificação de ações de servidor foram aprovados.
+
+### Recuperação e validação integrada em 09/10/2026
+
+O perfil Colima `tier-trade` foi recuperado sem recriar a VM, o volume Docker ou o banco. A falha era causada por agentes e túnel SSH órfãos após a interrupção anterior: a VM voltou com o disco existente, o PostgreSQL concluiu a recuperação automática de WAL e a porta documentada `55432` foi restabelecida. Nenhum dado de produção ou projeto Supabase foi acessado.
+
+A suíte completa passou no PostgreSQL dedicado `tier_trade_test`: **19 arquivos e 47 testes aprovados**, incluindo comercial, operações, estoque, fiscal, financeiro, risco, controle de acesso, reset demo e migrações. O cenário de destino confirmou versão 1 com diferença positiva, correção para versão 2 com diferença negativa, preservação do movimento de expedição e efeito financeiro `PENDING_POLICY`. As suítes comercial e fiscal também foram alinhadas ao contrato assíncrono atual do dashboard, aplicando as migrações do read model e solicitando atualização explícita antes de validar indicadores.
+
+Situação dos cinco ensaios antes da etapa 4: VAL-01 e VAL-02 estavam automatizados no fluxo de destino; VAL-03 tinha componente manual de desconto e impacto no título, mas não os números exatos; VAL-04 tinha o motor fiscal, mas não o catálogo sintético isolado; VAL-05 apenas detectava o ticket ausente.
+
+### Etapa 4 — fechamento técnico de VAL-03 a VAL-05 em 09/10/2026
+
+VAL-03 foi executado com os números sintéticos exatos: base didática de R$ 40.000,00, taxa candidata de 10%, componente manual de R$ 4.000,00 e saldo simulado de R$ 36.000,00. A suíte integrada confirma que o componente reduz o título de compra em R$ 4.000,00 e não altera o saldo físico. A descrição e a referência do componente o identificam como ensaio; a fórmula continua sem validade de produção até V03.
+
+VAL-04 recebeu um catálogo estritamente isolado no teste, com `TRIBUTO_TESTE_A` a 1,00% e `TRIBUTO_TESTE_B` a 0,20% sobre R$ 100.000,00. A memória reproduz R$ 1.000,00 + R$ 200,00, total de R$ 1.200,00 e líquido de R$ 98.800,00. Nenhuma configuração sintética foi persistida ou disponibilizada ao operador. O fluxo fiscal integrado já cobre configuração versionada, cálculo, aceite, obrigação, título, liquidação e estorno com os tipos oficialmente suportados.
+
+VAL-05 foi implementado como workflow por sacado e terminal. Uma política ativa e versionada define tipo de exigência, título, responsável, prazo em horas, portal e consequência potencial. Cada nova expedição correspondente recebe uma cópia imutável desses dados; o operador registra evidência, protocolo e transições `PENDING`, `SUBMITTED`, `ACCEPTED`, `REJECTED` ou `WAIVED`, todas auditadas. Ticket informado no destino é associado à pendência correspondente. A interface mostra a fila e permite cadastrar nova versão da política e atualizar a ocorrência. Consequências de fechamento ou antecipação são exibidas como **não aplicadas** até V04.
+
+Validação desta etapa: **19 arquivos e 49 testes aprovados** no PostgreSQL local dedicado, incluindo o fluxo completo de política → expedição → pendência → protocolo; build da API, tipagem, verificação de ações de servidor e build de produção do frontend aprovados. A migration inclui RLS forçada por tenant, índices da fila, referências compostas e limpeza segura do tenant demo. Nenhum deploy, dado de produção ou regra oficial foi alterado.
+
+### Etapa 5 — conciliação econômica por expedição em 10/10/2026
+
+Foi implementada a visão econômica derivada por expedição, sem criar nova fonte de verdade. A cadeia liga contrato de compra, carga e lote à versão do contrato de venda, evento financeiro de receita, custo de aquisição proporcional, componentes ativos de compra, margem operacional, NF-e de saída, título a receber, baixas não estornadas e saldo em aberto. Peso aceito e ticket do destino aparecem na mesma linha para comparação documental, mas continuam sem aplicar ajuste em nota, título ou caixa.
+
+A consulta usa somente vínculos persistidos e preserva a semântica já declarada de `OPERATIONAL_REALIZED_MARGIN_V1`: receita da expedição menos custo de aquisição proporcional e componentes ativos. Se a compra ainda não tiver evento valorizado, custo e margem ficam explicitamente pendentes; não são preenchidos por estimativa. NF-e, recebível e baixa também exibem ausências separadamente, permitindo localizar o ponto incompleto da cadeia.
+
+A interface de Estoque recebeu o quadro “Da carga ao recebimento”, com links para a carga e colunas de volume expedido/destino, receita, custo, margem, NF-e, título, recebido e saldo. A implementação permaneceu no componente de servidor, sem novo estado cliente, efeitos ou chamadas em cascata.
+
+Validação: todas as migrations e o seed demo foram aplicados em PostgreSQL embutido descartável; a prova ligou expedição, carga, custo proporcional, NF-e `NFE-DEMO-0001`, título `TR-2026-0001`, baixa de R$ 4.000,00 e saldo de R$ 7.360,00, além de conferir a identidade `margem = receita − custo − componentes`. A API compilou; **27 testes passaram e 23 integrações externas foram puladas** porque o volume `HD Externo`, que contém o Colima, deixou de estar visível ao macOS durante a execução. Tipagem, ações de servidor e build de produção do frontend passaram. Nenhum dado foi recriado ou apagado e nenhum deploy foi executado.
+
 ## Próxima sequência recomendada
 
-1. Concluir e publicar o pacote em execução acima.
-2. Executar JD-01 a JD-04 com os diretores quando os dados oficiais estiverem disponíveis.
-3. Parametrizar D02, D03 e D04 sem embutir regra específica da JD no código.
-4. Corrigir as ressalvas do aceite e fechar a homologação do piloto.
-5. Retomar preço a fixar e fixações parciais.
+1. Fechar as decisões V01–V05 registradas em `decisions-pending.md` com uma sessão curta de processo envolvendo direção, fiscal, financeiro e logística; pauta e recomendações já estão preparadas.
+2. Quando o `HD Externo` voltar a ser reconhecido, iniciar o Colima e repetir a suíte integrada completa no PostgreSQL dedicado, sem recriar o volume.
+3. Homologar e implementar o desconto de qualidade contratual com memória, contraprova, aprovação e ajuste financeiro.
+4. Parametrizar a matriz fiscal oficial e adicionar seleção automática por contexto com revisão humana para exceções.
+5. Provar upload/download e vínculos de documentos com arquivos de ensaio autorizados.
+6. Executar os cenários JD-01 a JD-04 e VAL-01 a VAL-05 com os diretores; corrigir apenas lacunas observadas e registrar o aceite.
+7. Após V04, ativar de forma controlada as consequências de fechamento ou antecipação que hoje são apenas registradas no workflow por sacado.
+8. Levantar e priorizar integrações externas por portal somente depois do fluxo manual homologado e da análise de viabilidade.
+9. Retomar preço a fixar, contábil e risco de mercado conforme D02, D07 e D08, sem concorrer com o fechamento do piloto operacional.
+
+Itens concluídos nas rodadas de 09 e 10/10: execução exata de VAL-03; catálogo isolado e memória exata de VAL-04; workflow manual e auditável de VAL-05; conciliação econômica por expedição/carga/contrato. O item 1 permanece primeiro porque exige decisão humana. A repetição no PostgreSQL externo foi adicionada como atividade operacional por causa da desmontagem física do volume, não por falha funcional detectada.
 
 ## Pacote iniciado em 08/10/2026
 

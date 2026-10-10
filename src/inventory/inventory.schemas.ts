@@ -51,6 +51,42 @@ export const dispatchSchema = z.object({
   notes: z.string().trim().min(1).max(1000).nullable(),
 });
 
+export const destinationReceiptSchema = z.object({
+  destinationWeightKg: positiveDecimal,
+  unloadedAt: timestamp,
+  terminalCode: z.string().trim().toUpperCase()
+    .pipe(z.string().regex(/^[A-Z0-9][A-Z0-9_-]{1,31}$/)),
+  ticketReference: z.string().trim().min(1).max(80),
+  destinationDocumentReference: z.string().trim().min(1).max(80).nullable(),
+  reason,
+  notes: z.string().trim().min(1).max(1000).nullable(),
+});
+
+export const deliveryRequirementPolicySchema = z.object({
+  counterpartyId: z.uuid(),
+  terminalCode: z.string().trim().toUpperCase()
+    .pipe(z.string().regex(/^[A-Z0-9][A-Z0-9_-]{1,31}$/)),
+  requirementType: z.enum(['DESTINATION_TICKET', 'PORTAL_CONFIRMATION']),
+  title: z.string().trim().min(3).max(160),
+  responsibleName: z.string().trim().min(2).max(120),
+  dueHoursAfterDispatch: z.number().int().min(0).max(720),
+  portalName: z.string().trim().min(2).max(120).nullable(),
+  portalUrl: z.url().max(500).nullable(),
+  consequence: z.enum(['INFORMATIONAL', 'BLOCK_OPERATIONAL_CLOSURE', 'BLOCK_ANTICIPATION']),
+});
+
+export const updateDeliveryRequirementSchema = z.object({
+  status: z.enum(['PENDING', 'SUBMITTED', 'ACCEPTED', 'REJECTED', 'WAIVED']),
+  evidenceReference: z.string().trim().min(1).max(160).nullable(),
+  portalConfirmation: z.string().trim().min(1).max(160).nullable(),
+  notes: z.string().trim().min(1).max(1000).nullable(),
+  reason,
+}).superRefine((value, context) => {
+  if (value.status === 'SUBMITTED' && !value.evidenceReference && !value.portalConfirmation) {
+    context.addIssue({ code: 'custom', path: ['evidenceReference'], message: 'Informe a evidência ou a confirmação do portal.' });
+  }
+});
+
 export const inventoryLocationSchema = z.object({
   code: z.string().trim().toUpperCase()
     .pipe(z.string().regex(/^[A-Z0-9][A-Z0-9_-]{1,31}$/)),
@@ -99,6 +135,9 @@ export type SalesContractStatusTransitionInput = z.infer<typeof salesContractSta
 export type SalesContractAmendmentInput = z.infer<typeof salesContractAmendmentSchema>;
 export type AllocationInput = z.infer<typeof allocationSchema>;
 export type DispatchInput = z.infer<typeof dispatchSchema>;
+export type DestinationReceiptInput = z.infer<typeof destinationReceiptSchema>;
+export type DeliveryRequirementPolicyInput = z.infer<typeof deliveryRequirementPolicySchema>;
+export type UpdateDeliveryRequirementInput = z.infer<typeof updateDeliveryRequirementSchema>;
 export type InventoryLocationInput = z.infer<typeof inventoryLocationSchema>;
 export type LotClassificationInput = z.infer<typeof lotClassificationSchema>;
 export type StartTransferInput = z.infer<typeof startTransferSchema>;

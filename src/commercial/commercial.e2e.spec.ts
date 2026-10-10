@@ -73,6 +73,8 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     await setup.query(await readFile(new URL('../../supabase/migrations/20261008032945_optimize_dashboard_rls_function_initplan.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261008034318_index_active_dashboard_tenants.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../supabase/migrations/20261008160000_grant_dashboard_pricing_read.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261009165000_dispatch_destination_receipts.sql', import.meta.url), 'utf8'));
+    await setup.query(await readFile(new URL('../../supabase/migrations/20261010002022_dispatch_delivery_requirements.sql', import.meta.url), 'utf8'));
     await setup.query(await readFile(new URL('../../scripts/seed-local.sql', import.meta.url), 'utf8'));
     await setup.end();
 
@@ -908,3 +910,13 @@ describe.runIf(Boolean(databaseUrl))('commercial HTTP flow with PostgreSQL', () 
     expect(sale.json()).toMatchObject({ commodity: 'SOJA' });
   });
 });
+
+async function refreshDashboards(app: NestFastifyApplication, tenantId: string) {
+  const processor = app.get(DashboardProcessor);
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const result = await processor.processTenant(tenantId);
+    expect(result.failed).toBe(0);
+    if (result.pending === 0) return;
+  }
+  throw new Error('Dashboard refresh queue did not drain.');
+}
